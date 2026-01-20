@@ -1,0 +1,204 @@
+[2025-12-24T15:42:36.438Z] {
+  "type": "unhandledRejection",
+  "reason": {
+    "message": "Object has been destroyed",
+    "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:79:38)\n    at BrowserWindow.emit (node:events:513:28)\n    at App.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/index.js:189:20)\n    at App.emit (node:events:513:28)\n    at click (/home/stargazer/Work/agent/web-guru/dist/main/main/menu/index.js:34:40)\n    at MenuItem.click (node:electron/js2c/browser_init:2:31004)\n    at Menu._executeCommand (node:electron/js2c/browser_init:2:36400)",
+    "name": "TypeError"
+  },
+  "timestamp": "2025-12-24T15:42:36.437Z"
+}
+
+[2025-12-24T16:29:17.046Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:79:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-24T16:29:17.045Z"
+}
+
+[2025-12-24T17:11:19.091Z] {
+  "type": "unhandledRejection",
+  "reason": {
+    "message": "Object has been destroyed",
+    "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:79:38)\n    at BrowserWindow.emit (node:events:513:28)\n    at App.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/index.js:196:20)\n    at App.emit (node:events:513:28)",
+    "name": "TypeError"
+  },
+  "timestamp": "2025-12-24T17:11:19.090Z"
+}
+
+[2025-12-24T17:33:04.034Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:79:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-24T17:33:04.033Z"
+}
+
+[2025-12-25T15:42:00.684Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:79:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-25T15:42:00.684Z"
+}
+
+[2025-12-25T17:41:51.669Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:79:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-25T17:41:51.669Z"
+}
+
+[2025-12-26T13:33:57.705Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:79:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-26T13:33:57.705Z"
+}
+
+[2025-12-26T13:57:33.716Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-26T13:57:33.715Z"
+}
+
+[2025-12-26T14:20:32.942Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-26T14:20:32.942Z"
+}
+
+[2025-12-27T18:18:26.699Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-27T18:18:26.699Z"
+}
+
+[2025-12-27T18:23:22.058Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:83:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-27T18:23:22.058Z"
+}
+
+[2025-12-27T18:32:16.602Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-27T18:32:16.601Z"
+}
+
+[2025-12-27T18:33:27.977Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:83:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-27T18:33:27.976Z"
+}
+
+[2025-12-27T19:14:52.686Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:83:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-27T19:14:52.686Z"
+}
+
+[2025-12-28T14:19:06.864Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:83:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-28T14:19:06.863Z"
+}
+
+[2025-12-28T14:21:35.601Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-28T14:21:35.600Z"
+}
+
+[2025-12-28T14:35:16.955Z] {
+  "type": "uncaughtException",
+  "message": "Object has been destroyed",
+  "stack": "TypeError: Object has been destroyed\n    at BrowserWindow.<anonymous> (/home/stargazer/Work/agent/web-guru/dist/main/main/windows/WindowService.js:83:38)\n    at BrowserWindow.emit (node:events:513:28)",
+  "name": "TypeError",
+  "timestamp": "2025-12-28T14:35:16.954Z"
+}
+
+[2025-12-28T14:55:29.176Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-28T14:55:29.176Z"
+}
+
+[2025-12-28T16:05:31.417Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-28T16:05:31.416Z"
+}
+
+[2025-12-28T16:12:46.441Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-28T16:12:46.441Z"
+}
+
+[2025-12-28T16:36:29.810Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-28T16:36:29.809Z"
+}
+
+[2025-12-28T16:48:59.000Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-28T16:48:58.999Z"
+}
+
+[2025-12-28T16:54:30.027Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-28T16:54:30.027Z"
+}
+
+[2025-12-28T17:14:01.755Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-28T17:14:01.755Z"
+}
+
+[2025-12-29T14:03:16.010Z] {
+  "type": "uncaughtException",
+  "message": "connect ECONNREFUSED 127.0.0.1:8000",
+  "stack": "Error: connect ECONNREFUSED 127.0.0.1:8000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1494:16)",
+  "name": "Error",
+  "timestamp": "2025-12-29T14:03:16.010Z"
+}
+

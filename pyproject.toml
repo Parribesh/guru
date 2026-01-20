@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Guru"
+version = "0.1.0"
+description = "Multiple agents"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph",
+    "fastapi",
+    "pydantic",
+    "uvicorn",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"} 
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: Guru
+Version: 0.1.0
+Summary: Multiple agents
+Requires-Python: >=3.10
+Requires-Dist: langgraph
+Requires-Dist: fastapi
+Requires-Dist: pydantic
+Requires-Dist: uvicorn
