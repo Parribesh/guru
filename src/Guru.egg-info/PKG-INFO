@@ -7,3 +7,6 @@ Requires-Dist: langgraph
 Requires-Dist: fastapi
 Requires-Dist: pydantic
 Requires-Dist: uvicorn
+Requires-Dist: sqlalchemy
+Requires-Dist: python-jose
+Requires-Dist: bcrypt

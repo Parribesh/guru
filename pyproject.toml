@@ -12,6 +12,9 @@ dependencies = [
     "fastapi",
     "pydantic",
     "uvicorn",
+    "sqlalchemy",
+    "python-jose",
+    "bcrypt"
 ]
 
 [tool.setuptools]

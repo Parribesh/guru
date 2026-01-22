@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
-from chat_agent.api.routes.auth_routes import auth_routes
-from chat_agent.api.routes.guru_routes import guru_routes
-from chat_agent import config
+from api.routes.auth_routes import auth_routes
+from api.routes.guru_routes import guru_routes
+from api.config import create_db 
 app = FastAPI()
-config.create_db()
+create_db()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
