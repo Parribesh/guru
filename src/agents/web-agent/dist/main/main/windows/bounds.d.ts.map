@@ -1,1 +1,0 @@
-{"version":3,"file":"bounds.d.ts","sourceRoot":"","sources":["../../../../app/main/windows/bounds.ts"],"names":[],"mappings":"AAEA,OAAO,EAAE,aAAa,EAAE,WAAW,EAAE,MAAM,UAAU,CAAC;AAEtD;;GAEG;AACH,wBAAgB,uBAAuB,CACrC,IAAI,EAAE,WAAW,EACjB,MAAM,EAAE,QAAQ,CAAC,SAAS,GACzB,IAAI,CAEN;AAED;;GAEG;AACH,wBAAgB,oBAAoB,CAClC,IAAI,EAAE,WAAW,EACjB,MAAM,EAAE,aAAa,GACpB,IAAI,CAmCN"}

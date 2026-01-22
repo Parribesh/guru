@@ -1,1 +1,0 @@
-{"version":3,"file":"server.d.ts","sourceRoot":"","sources":["../../../../app/main/cli/server.ts"],"names":[],"mappings":"AAGA,OAAO,EAAE,aAAa,EAAE,MAAM,UAAU,CAAC;AAkBzC,wBAAgB,cAAc,CAC5B,UAAU,EAAE,aAAa,GAAG,IAAI,EAChC,mBAAmB,EAAE,CAAC,KAAK,EAAE,GAAG,EAAE,OAAO,EAAE;IAAE,GAAG,CAAC,EAAE,MAAM,CAAC;IAAC,cAAc,CAAC,EAAE,MAAM,CAAA;CAAE,KAAK,OAAO,CAAC,GAAG,CAAC,GACpG,IAAI,CAuJN"}
