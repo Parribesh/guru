@@ -53,6 +53,9 @@ src/agents/**/*.db
 src/agents/**/*.sqlite
 src/agents/**/*.sqlite3
 
+# Web-agent runtime session captures (generated, can be large)
+src/agents/web-agent/data/sessions/
+
 # OS / IDE
 .DS_Store
 Thumbs.db
