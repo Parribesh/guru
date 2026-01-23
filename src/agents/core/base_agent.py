@@ -18,13 +18,13 @@ class BaseAgent(ABC):
 
     #-----Public API-----
 
-    def run (self, imput: str) -> str:
-        self.before_run(input)
+    def run(self, input: str) -> str:
+        self._before_run(input)
 
         plan = self.plan(input)
         result = self.execute(plan)
 
-        self._after_run(input , result)
+        self._after_run(input, result)
         return result
 
     #-----------EXTENSION POINTS-----------

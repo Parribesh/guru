@@ -1,6 +1,5 @@
-from api.config import Base, get_db
+from api.config import Base
 from sqlalchemy import Column, Integer, String, JSON
-from api.utils.auth_utils import get_password_hash
 
 class User(Base):
     __tablename__ = "users"

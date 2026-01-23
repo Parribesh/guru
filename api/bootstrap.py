@@ -3,7 +3,7 @@ from agents.chat_agent.agent import ChatAgent
 from agents.rag_agent.agent import RAGAgent
 
 from infra.llm.ollama import OllamaLLM
-from infra.vector import ChromaStore
+from infra.vector.chroma_store import ChromaStore
 
 
 def build_registry() -> AgentRegistry:
@@ -15,14 +15,15 @@ def build_registry() -> AgentRegistry:
     registry.register(
         "rag",
         lambda: RAGAgent(
-            llm=llm,
-            vector_store=vector_store,
+            name="RAGAgent",
+            store=vector_store,
         ),
     )
 
     registry.register(
         "chat",
         lambda: ChatAgent(
+            name="ChatAgent",
             llm=llm,
             registry=registry,
         ),

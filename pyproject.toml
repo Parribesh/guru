@@ -14,7 +14,15 @@ dependencies = [
     "uvicorn",
     "sqlalchemy",
     "python-jose",
-    "bcrypt"
+    "bcrypt",
+    "pydantic_settings",
+    "chromadb",
+    # Text extraction for ingestion (optional at runtime depending on file types)
+    "pypdf",
+    "python-docx",
+    "python-pptx",
+    "striprtf",
+    "beautifulsoup4",
 ]
 
 [tool.setuptools]

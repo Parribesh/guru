@@ -7,9 +7,11 @@ from api.utils.auth import get_current_user, get_user_by_email, set_auth_cookie,
 from sqlalchemy.orm import Session
 from api.config import get_db
 from api.utils.auth import authenticate_user
+from api.utils.logger import configure_logging
 
 auth_routes = APIRouter()
 security = HTTPBearer()
+logger = configure_logging()
 
 
     
@@ -18,8 +20,10 @@ def login(request: LoginRequest, response: Response, db: Session = Depends(get_d
     """Authenticate user and set HTTP-only cookie with token."""
     user = authenticate_user(request.email, request.password, db)
     if not user:
+        logger.warning("login failed email=%s", request.email)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
     set_auth_cookie(response, user)
+    logger.info("login ok email=%s", request.email)
     return LoginResponse(message="Login successful - HTTP-only cookie set!", token_set=True)
 
 
@@ -41,9 +45,10 @@ def register(request: RegisterRequest, response: Response, db: Session = Depends
     try:
         user = create_user(request.email, request.password, db)
         set_auth_cookie(response, user)
+        logger.info("register ok email=%s", request.email)
         return RegisterResponse(message="Registration successful")
     except Exception as e:
-        print(f"Error creating user: {e}")
+        logger.exception("register failed email=%s", request.email)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @auth_routes.post("/logout")
@@ -51,7 +56,9 @@ def logout(response: Response) -> LogoutResponse:
     """Clear the authentication cookie."""
     try:
         clear_auth_cookie(response)
+        logger.info("logout ok")
     except Exception as e:
+        logger.exception("logout failed")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     return LogoutResponse(message="Logout successful - cookie cleared")
 
