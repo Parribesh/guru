@@ -22,6 +22,7 @@ class ChatGraphState(TypedDict, total=False):
     system_prompt: str
     max_tokens: Optional[int]  # Token budget constraint (e.g., 150)
     conversation_id: Optional[str]  # For semantic history retrieval
+    retrieved_history: Optional[str]  # Retrieved history for display (SSE event)
 
 def build_chat_graph(
     *,
@@ -138,6 +139,16 @@ def build_chat_graph(
                     k=10,
                     include_last=True
                 )
+                
+                # Store retrieved history in state for SSE emission
+                # Format history for display
+                history_display = []
+                if retrieved_history:
+                    for u, a in retrieved_history:
+                        history_display.append(f"User: {u}\nAssistant: {a}")
+                
+                # Store in state metadata for routes to emit
+                state["retrieved_history"] = "\n\n".join(history_display) if history_display else ""
                 
                 # Build prompt with retrieved history
                 parts = [compressed_system]

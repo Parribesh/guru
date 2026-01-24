@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query
 import json
 from datetime import datetime
 from uuid import uuid4
+from typing import Optional
 
 from fastapi import Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -685,6 +686,43 @@ async def start_learning_session(module_id: str, current_user: User = Depends(ge
     return StartLearningSessionResponse(session_id=session_id, conversation_id=conversation_id, greeting=greeting)
 
 
+def _retrieve_and_format_history(query: str, conversation_id: str, max_tokens: int = 150) -> Optional[str]:
+    """
+    Helper function to retrieve history and format it for display.
+    Returns formatted history text or None if retrieval fails.
+    """
+    try:
+        from api.utils.history_store import get_history_store
+        from api.utils.token_budget import estimate_tokens
+        
+        # Calculate available budget for history
+        query_tokens = estimate_tokens(query)
+        formatting_overhead = 15
+        available_for_system_and_history = max_tokens - query_tokens - formatting_overhead
+        history_budget = int((available_for_system_and_history - int(available_for_system_and_history * 0.4)) * 0.6)
+        
+        # Retrieve relevant history
+        history_store = get_history_store()
+        retrieved_history = history_store.retrieve_relevant_history(
+            query=query,
+            conversation_id=conversation_id,
+            max_tokens=history_budget,
+            k=10,
+            include_last=True
+        )
+        
+        # Format for display
+        if retrieved_history:
+            history_display = []
+            for u, a in retrieved_history:
+                history_display.append(f"User: {u}\nAssistant: {a}")
+            return "\n\n".join(history_display)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to retrieve history for display: {e}")
+    return None
+
+
 @guru_routes.get("/learning/{conversation_id}/stream")
 async def stream_learning(
     conversation_id: str,
@@ -793,6 +831,16 @@ async def stream_learning(
     async def gen():
         # Debug/trace: emit the exact system prompt the agent will use.
         yield f"event: system_prompt\ndata: {json.dumps({'system_prompt': agent.state.metadata.get('system_prompt', '')})}\n\n"
+        
+        # Retrieve and emit history retrieval event
+        retrieved_history_text = _retrieve_and_format_history(
+            validated.message,
+            conversation_id,
+            agent.state.metadata.get("max_tokens", 150)
+        )
+        if retrieved_history_text:
+            yield f"event: history_retrieved\ndata: {json.dumps({'history': retrieved_history_text})}\n\n"
+        
         chunks: list[str] = []
         try:
             async for c in agent.run_stream(validated.message):
@@ -916,6 +964,16 @@ async def stream_test(
     async def gen():
         # Debug/trace: emit the exact system prompt the agent will use.
         yield f"event: system_prompt\ndata: {json.dumps({'system_prompt': agent.state.metadata.get('system_prompt', '')})}\n\n"
+        
+        # Retrieve and emit history retrieval event
+        retrieved_history_text = _retrieve_and_format_history(
+            validated.message,
+            convo_id,
+            agent.state.metadata.get("max_tokens", 150)
+        )
+        if retrieved_history_text:
+            yield f"event: history_retrieved\ndata: {json.dumps({'history': retrieved_history_text})}\n\n"
+        
         chunks: list[str] = []
         try:
             async for c in agent.run_stream(validated.message):

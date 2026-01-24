@@ -12,6 +12,7 @@ export const LearningSessionChat = () => {
   const [streamingContent, setStreamingContent] = useState<string>('')
   const [systemPrompt, setSystemPrompt] = useState<string>('')
   const [showOptions, setShowOptions] = useState(false)
+  const [retrievedHistory, setRetrievedHistory] = useState<string | null>(null)
   
   const streamRef = useRef<EventSource | null>(null)
   const inFlightRef = useRef(false)
@@ -120,6 +121,16 @@ export const LearningSessionChat = () => {
       }
     })
 
+    // Handle history_retrieved event
+    source.addEventListener('history_retrieved', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data as string) as { history?: string }
+        setRetrievedHistory(payload.history ?? null)
+      } catch (e) {
+        console.error('failed to parse history_retrieved', e)
+      }
+    })
+
     // Tokens / chunks (default SSE "message" event)
     source.onmessage = (event) => {
       if (requestIdRef.current !== rid) return
@@ -136,6 +147,7 @@ export const LearningSessionChat = () => {
       inFlightRef.current = false
       setLoading(false)
       setStreamingContent('')
+      setRetrievedHistory(null)  // Clear history display after response
       refreshMessages()
     })
 
@@ -204,10 +216,22 @@ export const LearningSessionChat = () => {
         <div ref={historyContainerRef} className="min-h-0 flex-1 overflow-auto px-4 py-4">
           {!conversationId ? (
             <div className="text-sm text-gray-500">Loading conversation...</div>
-          ) : displayMessages.length === 0 ? (
+          ) : displayMessages.length === 0 && !retrievedHistory ? (
             <div className="text-sm text-gray-500">(no messages yet)</div>
           ) : (
             <div className="space-y-3">
+              {/* History Retrieval Display */}
+              {retrievedHistory && (
+                <div className="mb-4 rounded-lg border-2 border-purple-300 bg-purple-50 p-3">
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className="text-sm font-semibold text-purple-900">🔍 History Retrieved</span>
+                    <span className="text-xs text-purple-600">(from semantic search)</span>
+                  </div>
+                  <div className="max-h-[200px] overflow-auto rounded-md border border-purple-200 bg-white p-2">
+                    <pre className="whitespace-pre-wrap text-xs text-gray-700">{retrievedHistory}</pre>
+                  </div>
+                </div>
+              )}
               {displayMessages.map((m) => {
                 const isStreaming = m.id === '__streaming__'
                 return (
