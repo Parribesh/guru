@@ -273,6 +273,15 @@ async def stream_chat(
             safe_greet = greeting.replace("\r", "").replace("\n", "\ndata: ")
             yield f"data: {safe_greet}\n\n"
 
+        # Retrieve and emit history retrieval event
+        retrieved_history_text = _retrieve_and_format_history(
+            validated_chat_request.message,
+            conversation_id,
+            agent.state.metadata.get("max_tokens", 150)
+        )
+        if retrieved_history_text:
+            yield f"event: history_retrieved\ndata: {json.dumps({'history': retrieved_history_text})}\n\n"
+
         assistant_chunks: list[str] = []
         try:
             async for chunk in agent.run_stream(validated_chat_request.message):
@@ -289,6 +298,13 @@ async def stream_chat(
             assistant_text = "".join(assistant_chunks)
             if assistant_text:
                 assistant_msg_id = str(uuid4())
+                # Store metadata with the assistant message
+                message_metadata = {}
+                if retrieved_history_text:
+                    message_metadata["retrieved_history"] = retrieved_history_text
+                if system_prompt:
+                    message_metadata["system_prompt"] = system_prompt
+                
                 db.add(
                     Message(
                         id=assistant_msg_id,
@@ -296,6 +312,7 @@ async def stream_chat(
                         role="assistant",
                         content=assistant_text,
                         seq=_next_seq(conversation_id, db),
+                        metadata=message_metadata if message_metadata else None,
                     )
                 )
                 db.commit()
@@ -851,6 +868,13 @@ async def stream_learning(
             text = "".join(chunks)
             if text:
                 assistant_msg_id = str(uuid4())
+                # Store metadata with the assistant message
+                message_metadata = {}
+                if retrieved_history_text:
+                    message_metadata["retrieved_history"] = retrieved_history_text
+                if system:
+                    message_metadata["system_prompt"] = system
+                
                 db.add(
                     Message(
                         id=assistant_msg_id,
@@ -858,6 +882,7 @@ async def stream_learning(
                         role="assistant",
                         content=text,
                         seq=_next_seq(conversation_id, db),
+                        metadata=message_metadata if message_metadata else None,
                     )
                 )
                 db.commit()
@@ -984,6 +1009,13 @@ async def stream_test(
             text = "".join(chunks)
             if text:
                 assistant_msg_id = str(uuid4())
+                # Store metadata with the assistant message
+                message_metadata = {}
+                if retrieved_history_text:
+                    message_metadata["retrieved_history"] = retrieved_history_text
+                if system:
+                    message_metadata["system_prompt"] = system
+                
                 db.add(
                     Message(
                         id=assistant_msg_id,
@@ -991,6 +1023,7 @@ async def stream_test(
                         role="assistant",
                         content=text,
                         seq=_next_seq(convo_id, db),
+                        metadata=message_metadata if message_metadata else None,
                     )
                 )
                 db.commit()

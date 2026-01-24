@@ -92,16 +92,30 @@ export const LearningSessionChat = () => {
     const newInteractions: Interaction[] = []
     let pendingUser: Message | null = null
 
+    // Preserve metadata from existing interactions by creating a map
+    const existingMetadataMap = new Map<string, InteractionMetadata>()
+    interactions.forEach((interaction) => {
+      const key = interaction.userMessage.id
+      if (interaction.metadata.retrievedHistory || interaction.metadata.systemPrompt) {
+        existingMetadataMap.set(key, interaction.metadata)
+      }
+    })
+
     for (const msg of visibleMessages) {
       if (msg.role === 'user') {
         pendingUser = msg
       } else if (msg.role === 'assistant' && pendingUser) {
+        // Preserve metadata if it exists, or use metadata from database
+        const existingMetadata = existingMetadataMap.get(pendingUser.id) || {}
+        const dbMetadata = msg.metadata || {}
         newInteractions.push({
           id: `${pendingUser.id}_${msg.id}`,
           userMessage: pendingUser,
           assistantMessage: msg,
           metadata: {
             timestamp: msg.created_at,
+            retrievedHistory: existingMetadata.retrievedHistory || dbMetadata.retrieved_history,
+            systemPrompt: existingMetadata.systemPrompt || dbMetadata.system_prompt,
           },
         })
         pendingUser = null
@@ -110,12 +124,14 @@ export const LearningSessionChat = () => {
 
     // Handle orphaned user message
     if (pendingUser) {
+      const existingMetadata = existingMetadataMap.get(pendingUser.id) || {}
       newInteractions.push({
         id: `${pendingUser.id}_pending`,
         userMessage: pendingUser,
         assistantMessage: null,
         metadata: {
           timestamp: pendingUser.created_at,
+          ...existingMetadata,
         },
       })
     }

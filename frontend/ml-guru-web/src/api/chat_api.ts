@@ -31,6 +31,11 @@ export type Message = {
     content: string
     seq: number
     created_at: string
+    metadata?: {
+        retrieved_history?: string
+        system_prompt?: string
+        [key: string]: any
+    } | null
 }
 
 export const listConversations = async (): Promise<Conversation[]> => {
