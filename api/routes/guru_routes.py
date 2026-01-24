@@ -400,6 +400,7 @@ async def get_messages(conversation_id: str, current_user: User = Depends(get_cu
                 content=m.content,
                 seq=m.seq,
                 created_at=_iso(m.created_at),
+                interaction_metadata=m.interaction_metadata,  # Include metadata
             )
             for m in msgs
         ]

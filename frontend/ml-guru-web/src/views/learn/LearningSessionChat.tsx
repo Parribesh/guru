@@ -108,14 +108,20 @@ export const LearningSessionChat = () => {
         // Preserve metadata if it exists, or use metadata from database
         const existingMetadata = existingMetadataMap.get(pendingUser.id) || {}
         const dbMetadata = msg.interaction_metadata || {}
+        
+        // Debug: log metadata to see what we're getting
+        if (dbMetadata && Object.keys(dbMetadata).length > 0) {
+          console.log('Found metadata in DB for message:', msg.id, dbMetadata)
+        }
+        
         newInteractions.push({
           id: `${pendingUser.id}_${msg.id}`,
           userMessage: pendingUser,
           assistantMessage: msg,
           metadata: {
             timestamp: msg.created_at,
-            retrievedHistory: existingMetadata.retrievedHistory || dbMetadata.retrieved_history,
-            systemPrompt: existingMetadata.systemPrompt || dbMetadata.system_prompt,
+            retrievedHistory: existingMetadata.retrievedHistory || dbMetadata.retrieved_history || undefined,
+            systemPrompt: existingMetadata.systemPrompt || dbMetadata.system_prompt || undefined,
           },
         })
         pendingUser = null

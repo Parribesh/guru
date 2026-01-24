@@ -37,6 +37,7 @@ class MessageResponse(BaseModel):
     content: str
     seq: int
     created_at: str
+    interaction_metadata: Optional[dict] = None  # Store retrieved_history, system_prompt, etc.
 
 
 class ConversationListResponse(BaseModel):
