@@ -4,6 +4,20 @@ import { API_URL } from '../../config/config'
 import { chatRequestSchema } from '../../schemas/restSchemas'
 import { fetchConversationMessages, type Message } from '../../api/chat_api'
 
+interface InteractionMetadata {
+  retrievedHistory?: string
+  systemPrompt?: string
+  timestamp: string
+}
+
+interface Interaction {
+  id: string
+  userMessage: Message
+  assistantMessage: Message | null
+  metadata: InteractionMetadata
+  isStreaming?: boolean
+}
+
 export const LearningSessionChat = () => {
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
@@ -12,11 +26,13 @@ export const LearningSessionChat = () => {
   const [streamingContent, setStreamingContent] = useState<string>('')
   const [systemPrompt, setSystemPrompt] = useState<string>('')
   const [showOptions, setShowOptions] = useState(false)
-  const [retrievedHistory, setRetrievedHistory] = useState<string | null>(null)
+  const [interactions, setInteractions] = useState<Interaction[]>([])
+  const [selectedInteractionId, setSelectedInteractionId] = useState<string | null>(null)
   
   const streamRef = useRef<EventSource | null>(null)
   const inFlightRef = useRef(false)
   const requestIdRef = useRef<string | null>(null)
+  const currentInteractionIdRef = useRef<string | null>(null)
   const navigate = useNavigate()
   const params = useParams<{ conversationId: string }>()
 
@@ -54,6 +70,7 @@ export const LearningSessionChat = () => {
     if (!conversationId) {
       setMessages([])
       setSystemPrompt('')
+      setInteractions([])
       return
     }
     fetchConversationMessages(conversationId)
@@ -64,20 +81,61 @@ export const LearningSessionChat = () => {
         if (sysMsg) {
           setSystemPrompt(sysMsg.content)
         }
+        // Build interactions from messages
+        buildInteractionsFromMessages(msgs)
       })
       .catch((e) => console.error('failed to fetch messages', e))
   }, [conversationId])
 
-  // Auto-scroll to bottom when messages change
+  const buildInteractionsFromMessages = (msgs: Message[]) => {
+    const visibleMessages = msgs.filter((m) => m.role !== 'system')
+    const newInteractions: Interaction[] = []
+    let pendingUser: Message | null = null
+
+    for (const msg of visibleMessages) {
+      if (msg.role === 'user') {
+        pendingUser = msg
+      } else if (msg.role === 'assistant' && pendingUser) {
+        newInteractions.push({
+          id: `${pendingUser.id}_${msg.id}`,
+          userMessage: pendingUser,
+          assistantMessage: msg,
+          metadata: {
+            timestamp: msg.created_at,
+          },
+        })
+        pendingUser = null
+      }
+    }
+
+    // Handle orphaned user message
+    if (pendingUser) {
+      newInteractions.push({
+        id: `${pendingUser.id}_pending`,
+        userMessage: pendingUser,
+        assistantMessage: null,
+        metadata: {
+          timestamp: pendingUser.created_at,
+        },
+      })
+    }
+
+    setInteractions(newInteractions)
+  }
+
+  // Auto-scroll to bottom when interactions change
   useEffect(() => {
     if (!historyEndRef.current) return
     historyEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages.length, streamingContent])
+  }, [interactions.length, streamingContent])
 
   const refreshMessages = () => {
     if (!conversationId) return
     fetchConversationMessages(conversationId)
-      .then(setMessages)
+      .then((msgs) => {
+        setMessages(msgs)
+        buildInteractionsFromMessages(msgs)
+      })
       .catch((e) => console.error('failed to fetch messages', e))
   }
 
@@ -96,6 +154,31 @@ export const LearningSessionChat = () => {
     setStreamingContent('')
     const rid = newRequestId()
     requestIdRef.current = rid
+    const interactionId = newRequestId()
+    currentInteractionIdRef.current = interactionId
+
+    // Create new interaction for this exchange
+    const userMessage: Message = {
+      id: `temp_${Date.now()}`,
+      conversation_id: conversationId,
+      role: 'user',
+      content: trimmed,
+      seq: messages.length + 1,
+      created_at: new Date().toISOString(),
+    }
+
+    setInteractions((prev) => [
+      ...prev,
+      {
+        id: interactionId,
+        userMessage,
+        assistantMessage: null,
+        metadata: {
+          timestamp: userMessage.created_at,
+        },
+        isStreaming: true,
+      },
+    ])
 
     const payload = {
       message: trimmed,
@@ -116,6 +199,14 @@ export const LearningSessionChat = () => {
       try {
         const payload = JSON.parse((event as MessageEvent).data as string) as { system_prompt?: string }
         setSystemPrompt(payload.system_prompt ?? '')
+        // Update current interaction metadata
+        setInteractions((prev) =>
+          prev.map((interaction) =>
+            interaction.id === interactionId
+              ? { ...interaction, metadata: { ...interaction.metadata, systemPrompt: payload.system_prompt } }
+              : interaction
+          )
+        )
       } catch (e) {
         console.error('failed to parse system_prompt', e)
       }
@@ -125,7 +216,14 @@ export const LearningSessionChat = () => {
     source.addEventListener('history_retrieved', (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent).data as string) as { history?: string }
-        setRetrievedHistory(payload.history ?? null)
+        // Update current interaction metadata
+        setInteractions((prev) =>
+          prev.map((interaction) =>
+            interaction.id === interactionId
+              ? { ...interaction, metadata: { ...interaction.metadata, retrievedHistory: payload.history } }
+              : interaction
+          )
+        )
       } catch (e) {
         console.error('failed to parse history_retrieved', e)
       }
@@ -147,7 +245,7 @@ export const LearningSessionChat = () => {
       inFlightRef.current = false
       setLoading(false)
       setStreamingContent('')
-      setRetrievedHistory(null)  // Clear history display after response
+      currentInteractionIdRef.current = null
       refreshMessages()
     })
 
@@ -158,6 +256,7 @@ export const LearningSessionChat = () => {
       inFlightRef.current = false
       setLoading(false)
       setStreamingContent('')
+      currentInteractionIdRef.current = null
     }
 
     setMessage('')
@@ -165,23 +264,37 @@ export const LearningSessionChat = () => {
 
   const canSend = useMemo(() => message.trim().length > 0 && !loading && conversationId !== null, [message, loading, conversationId])
 
-  // Combine persisted messages with streaming content (exclude system messages from display)
-  const displayMessages = useMemo(() => {
-    // Filter out system messages from display (they're shown in options modal)
-    const visibleMessages = messages.filter((m) => m.role !== 'system')
-    // If we're streaming, add a temporary assistant message with streaming content
-    if (streamingContent) {
-      visibleMessages.push({
-        id: '__streaming__',
-        conversation_id: conversationId || '',
-        role: 'assistant',
-        content: streamingContent,
-        seq: visibleMessages.length + 1,
-        created_at: new Date().toISOString(),
-      })
+  // Combine interactions with streaming content
+  const displayInteractions = useMemo(() => {
+    const result = [...interactions]
+    
+    // If streaming, update the last interaction or create a streaming one
+    if (streamingContent && currentInteractionIdRef.current) {
+      const lastIndex = result.length - 1
+      if (lastIndex >= 0 && result[lastIndex].id === currentInteractionIdRef.current) {
+        // Update existing interaction with streaming content
+        result[lastIndex] = {
+          ...result[lastIndex],
+          assistantMessage: {
+            id: '__streaming__',
+            conversation_id: conversationId || '',
+            role: 'assistant',
+            content: streamingContent,
+            seq: result[lastIndex].userMessage.seq + 1,
+            created_at: new Date().toISOString(),
+          },
+          isStreaming: true,
+        }
+      }
     }
-    return visibleMessages
-  }, [messages, streamingContent, conversationId])
+    
+    return result
+  }, [interactions, streamingContent, conversationId])
+
+  const selectedInteraction = useMemo(() => {
+    if (!selectedInteractionId) return null
+    return displayInteractions.find((i) => i.id === selectedInteractionId) || null
+  }, [selectedInteractionId, displayInteractions])
 
   return (
     <div className="h-[calc(100vh-120px)] w-full">
@@ -216,42 +329,57 @@ export const LearningSessionChat = () => {
         <div ref={historyContainerRef} className="min-h-0 flex-1 overflow-auto px-4 py-4">
           {!conversationId ? (
             <div className="text-sm text-gray-500">Loading conversation...</div>
-          ) : displayMessages.length === 0 && !retrievedHistory ? (
+          ) : displayInteractions.length === 0 ? (
             <div className="text-sm text-gray-500">(no messages yet)</div>
           ) : (
-            <div className="space-y-3">
-              {/* History Retrieval Display */}
-              {retrievedHistory && (
-                <div className="mb-4 rounded-lg border-2 border-purple-300 bg-purple-50 p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <span className="text-sm font-semibold text-purple-900">🔍 History Retrieved</span>
-                    <span className="text-xs text-purple-600">(from semantic search)</span>
-                  </div>
-                  <div className="max-h-[200px] overflow-auto rounded-md border border-purple-200 bg-white p-2">
-                    <pre className="whitespace-pre-wrap text-xs text-gray-700">{retrievedHistory}</pre>
-                  </div>
-                </div>
-              )}
-              {displayMessages.map((m) => {
-                const isStreaming = m.id === '__streaming__'
+            <div className="space-y-4">
+              {displayInteractions.map((interaction) => {
+                const isStreaming = interaction.isStreaming
                 return (
                   <div
-                    key={m.id}
-                    className={[
-                      'rounded-lg border p-3',
-                      m.role === 'user' ? 'ml-auto max-w-[80%] border-blue-200 bg-blue-50' : 'mr-auto max-w-[80%] border-gray-200 bg-gray-50',
-                      isStreaming ? 'opacity-75' : '',
-                    ].join(' ')}
+                    key={interaction.id}
+                    className="rounded-lg border-2 border-gray-200 bg-white shadow-sm"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-                        {m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Tutor' : m.role}
+                    {/* User Message Card */}
+                    <div className="rounded-t-lg border-b border-gray-200 bg-blue-50 p-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="mb-1 flex items-center gap-2">
+                            <span className="text-xs font-semibold uppercase tracking-wide text-blue-700">You</span>
+                            <span className="text-xs text-gray-500">
+                              {new Date(interaction.metadata.timestamp).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <div className="text-sm text-gray-900">{interaction.userMessage.content}</div>
+                        </div>
                       </div>
-                      {isStreaming && (
-                        <div className="text-xs text-gray-400">Streaming...</div>
-                      )}
                     </div>
-                    <div className="mt-1 whitespace-pre-wrap text-sm text-gray-900">{m.content}</div>
+
+                    {/* Assistant Message Card */}
+                    {interaction.assistantMessage && (
+                      <div className="p-3">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="mb-1 flex items-center gap-2">
+                              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Tutor</span>
+                              {isStreaming && (
+                                <span className="text-xs text-gray-400">Streaming...</span>
+                              )}
+                            </div>
+                            <div className="whitespace-pre-wrap text-sm text-gray-900">
+                              {interaction.assistantMessage.content}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedInteractionId(interaction.id)}
+                            className="ml-2 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                          >
+                            Options
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -286,7 +414,87 @@ export const LearningSessionChat = () => {
         </div>
       </div>
 
-      {/* Options Modal */}
+      {/* Interaction Options Modal */}
+      {selectedInteraction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" onClick={() => setSelectedInteractionId(null)}>
+          <div className="w-full max-w-3xl rounded-lg border border-gray-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Interaction Options</h2>
+              <button
+                type="button"
+                onClick={() => setSelectedInteractionId(null)}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-semibold text-gray-700">Interaction ID</label>
+                <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-2 font-mono text-xs text-gray-900">
+                  {selectedInteraction.id}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold text-gray-700">Timestamp</label>
+                <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-2 text-sm text-gray-900">
+                  {new Date(selectedInteraction.metadata.timestamp).toLocaleString()}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold text-gray-700">User Message</label>
+                <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-900">
+                  {selectedInteraction.userMessage.content}
+                </div>
+              </div>
+
+              {selectedInteraction.assistantMessage && (
+                <div>
+                  <label className="text-sm font-semibold text-gray-700">Assistant Response</label>
+                  <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-900 whitespace-pre-wrap">
+                    {selectedInteraction.assistantMessage.content}
+                  </div>
+                </div>
+              )}
+
+              {selectedInteraction.metadata.retrievedHistory && (
+                <div>
+                  <label className="text-sm font-semibold text-gray-700">
+                    🔍 Retrieved History (from semantic search)
+                  </label>
+                  <div className="mt-1 max-h-[300px] overflow-auto rounded-md border border-purple-200 bg-purple-50 p-3">
+                    <pre className="whitespace-pre-wrap text-xs text-gray-700">
+                      {selectedInteraction.metadata.retrievedHistory}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {selectedInteraction.metadata.systemPrompt && (
+                <div>
+                  <label className="text-sm font-semibold text-gray-700">System Prompt</label>
+                  <div className="mt-1 max-h-[300px] overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3">
+                    <pre className="whitespace-pre-wrap text-xs text-gray-900">
+                      {selectedInteraction.metadata.systemPrompt}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {!selectedInteraction.metadata.retrievedHistory && !selectedInteraction.metadata.systemPrompt && (
+                <div className="text-sm text-gray-500 italic">
+                  No additional metadata available for this interaction.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global Chat Options Modal */}
       {showOptions && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" onClick={() => setShowOptions(false)}>
           <div className="w-full max-w-2xl rounded-lg border border-gray-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
@@ -337,4 +545,3 @@ export const LearningSessionChat = () => {
 }
 
 export default LearningSessionChat
-
