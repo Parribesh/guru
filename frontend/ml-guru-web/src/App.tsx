@@ -5,6 +5,7 @@ import { GuruChat } from './views/guru/GuruChat'
 import { AuthForm } from './views/auth/AuthForm'
 import { axiosInstance } from './config/axiosConfig'
 import { Courses } from './views/courses/Courses'
+import LearningSessionChat from './views/learn/LearningSessionChat'
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -84,14 +85,6 @@ function App() {
             </Protected>
           }
         />
-        <Route
-          path="/chat/:conversationId"
-          element={
-            <Protected>
-              <GuruChat />
-            </Protected>
-          }
-        />
 
         <Route
           path="/courses"
@@ -106,6 +99,15 @@ function App() {
           element={
             <Protected>
               <Courses />
+            </Protected>
+          }
+        />
+
+        <Route
+          path="/learn/:conversationId"
+          element={
+            <Protected>
+              <LearningSessionChat />
             </Protected>
           }
         />

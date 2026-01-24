@@ -61,13 +61,7 @@ export const Courses = () => {
   const [testSystemPrompt, setTestSystemPrompt] = useState<string>('')
   const esRef = useRef<EventSource | null>(null)
 
-  // Learning UI
-  const [learningConversationId, setLearningConversationId] = useState<string | null>(null)
-  const [learnMessage, setLearnMessage] = useState('')
-  const [learnStream, setLearnStream] = useState('')
-  const [learnStatus, setLearnStatus] = useState<string | null>(null)
-  const [learnSystemPrompt, setLearnSystemPrompt] = useState<string>('')
-  const learnEsRef = useRef<EventSource | null>(null)
+  // Learning UI - removed (now handled by LearningSessionChat component)
 
   const loadCourses = () =>
     axiosInstance
@@ -106,8 +100,6 @@ export const Courses = () => {
       esRef.current = null
       syllabusEsRef.current?.close()
       syllabusEsRef.current = null
-      learnEsRef.current?.close()
-      learnEsRef.current = null
     }
   }, [])
 
@@ -256,48 +248,14 @@ export const Courses = () => {
     try {
       const r = await axiosInstance.post(`/guru/modules/${moduleId}/learn/start`)
       const data = r.data as { session_id: string; conversation_id: string; greeting?: string }
-      setLearningConversationId(data.conversation_id)
-      setLearnStream(data.greeting ? `${data.greeting}\n\n` : '')
-      setLearnStatus('started')
-      setLearnSystemPrompt('')
+      // Redirect to dedicated learning session chat view
+      navigate(`/learn/${data.conversation_id}`, { replace: false })
     } finally {
       setBusy(false)
     }
   }
 
-  const sendLearn = async () => {
-    if (!learningConversationId) return
-    const trimmed = learnMessage.trim()
-    if (!trimmed) return
-
-    learnEsRef.current?.close()
-    setLearnMessage('')
-    setLearnStatus('streaming')
-    const payload = encodeURIComponent(JSON.stringify({ message: trimmed, conversation_id: null }))
-    const url = `${API_URL}/guru/learning/${learningConversationId}/stream?payload=${payload}`
-    const es = new EventSource(url, { withCredentials: true })
-    learnEsRef.current = es
-    es.addEventListener('system_prompt', (event) => {
-      try {
-        const payload = JSON.parse((event as MessageEvent).data as string) as { system_prompt?: string }
-        setLearnSystemPrompt(payload.system_prompt ?? '')
-      } catch (e) {
-        console.error('failed to parse learn system_prompt', e)
-      }
-    })
-    es.onmessage = (ev) => setLearnStream((p) => p + (ev.data as string))
-    es.addEventListener('end', () => {
-      es.close()
-      if (learnEsRef.current === es) learnEsRef.current = null
-      setLearnStatus('idle')
-    })
-    es.onerror = (e) => {
-      console.error('learn stream error', e)
-      es.close()
-      if (learnEsRef.current === es) learnEsRef.current = null
-      setLearnStatus('error')
-    }
-  }
+  // sendLearn removed - now handled by LearningSessionChat component
 
   const sendTest = async () => {
     if (!activeAttemptId) return
@@ -557,23 +515,6 @@ export const Courses = () => {
               </div>
             </div>
 
-            <div className="mt-6 rounded-md border border-gray-200 p-3">
-              <div className="text-sm font-semibold">Learning Session</div>
-              <div className="mt-2 text-xs text-gray-500">conversation: {learningConversationId ?? '(none)'} {learnStatus ? `• ${learnStatus}` : ''}</div>
-              {learnSystemPrompt ? (
-                <details className="mt-2 rounded-md border border-gray-200 bg-gray-50 p-2">
-                  <summary className="cursor-pointer text-xs font-semibold text-gray-700">Agent system prompt (source of truth)</summary>
-                  <pre className="mt-2 max-h-[220px] overflow-auto whitespace-pre-wrap text-xs">{learnSystemPrompt}</pre>
-                </details>
-              ) : null}
-              <div className="mt-2 flex gap-2">
-                <input className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm" value={learnMessage} onChange={(e) => setLearnMessage(e.target.value)} placeholder="Ask a question…" />
-                <button disabled={!learningConversationId} className="rounded-md bg-gray-900 px-3 py-2 text-sm font-semibold text-white disabled:bg-gray-300" onClick={sendLearn} type="button">
-                  Send
-                </button>
-              </div>
-              <pre className="mt-3 max-h-[220px] overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-xs whitespace-pre-wrap">{learnStream}</pre>
-            </div>
 
             <div className="mt-6 rounded-md border border-gray-200 p-3">
               <div className="text-sm font-semibold">Module Test</div>

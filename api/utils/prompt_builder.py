@@ -50,7 +50,22 @@ def build_tutor_system_prompt(
     progress_best_score: float,
     progress_attempts: int,
     progress_passed: bool,
+    compressed: bool = True,
 ) -> str:
+    """
+    Build tutor system prompt. If compressed=True, creates a minimal version for token-constrained inference.
+    """
+    if compressed:
+        # Ultra-compressed version (~30-40 tokens)
+        obj_short = ", ".join(objectives[:3]) if objectives else "module objectives"
+        status = "passed" if progress_passed else "learning"
+        return (
+            f"Tutor for {user_name}. Module {module_order_index}: {module_title}. "
+            f"Objectives: {obj_short}. Status: {status}. "
+            f"Be concise: explain briefly, give 1 example, ask 1 question."
+        )
+    
+    # Full version (original)
     objectives_text = "\n".join([f"- {o}" for o in (objectives or [])]) or "- (no objectives provided)"
     goals_text = (course_goals or "").strip()
     goals_block = f"\nCourse goals:\n{goals_text}\n" if goals_text else ""
@@ -78,14 +93,26 @@ def build_tutor_system_prompt(
         Teaching style:
         - Start with a short diagnostic question when needed.
         - Explain concepts with a tight example.
-        - Give a mini-exercise and wait for the learner’s answer.
+        - Give a mini-exercise and wait for the learner's answer.
         - Be concise and practical; avoid long lectures.
         - If the learner is stuck, provide a hint first, then the solution.
         """
     ).strip()
 
 
-def build_test_system_prompt(*, module_title: str, objectives: list[str]) -> str:
+def build_test_system_prompt(*, module_title: str, objectives: list[str], compressed: bool = True) -> str:
+    """
+    Build test system prompt. If compressed=True, creates a minimal version for token-constrained inference.
+    """
+    if compressed:
+        # Ultra-compressed version (~25-30 tokens)
+        obj_short = ", ".join(objectives[:2]) if objectives else "objectives"
+        return (
+            f"Test agent for: {module_title}. Assess: {obj_short}. "
+            f"Ask 1 question at a time. Brief feedback only."
+        )
+    
+    # Full version (original)
     objectives_text = "\n".join([f"- {o}" for o in (objectives or [])]) or "- (no objectives provided)"
     return dedent(
         f"""

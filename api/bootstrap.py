@@ -9,7 +9,7 @@ from infra.vector.chroma_store import ChromaStore
 def build_registry() -> AgentRegistry:
     registry = AgentRegistry()
 
-    llm = OllamaLLM(model="llama3.2:latest")
+    llm = OllamaLLM(model="qwen:latest")
     vector_store = ChromaStore()
 
     registry.register(

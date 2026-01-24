@@ -52,6 +52,7 @@ class ChatAgent(BaseAgent):
             stream=self.state.stream,
             answer_stream=None,
             system_prompt=str(self.state.metadata.get("system_prompt") or ""),
+            max_tokens=self.state.metadata.get("max_tokens"),  # Token budget constraint (e.g., 150)
         )
 
     def execute(self, plan: Any) -> Union[str, AsyncIterator[str]]:

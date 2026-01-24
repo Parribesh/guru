@@ -261,6 +261,7 @@ async def stream_chat(
     agent.state.stream = True
     agent.state.history = _load_history_pairs(conversation_id, db)
     agent.state.metadata["system_prompt"] = system_prompt
+    agent.state.metadata["max_tokens"] = 150  # Token budget for fast inference
 
     async def stream_generator():
         if created_new_conversation:
@@ -585,7 +586,7 @@ async def start_module_test(module_id: str, current_user: User = Depends(get_cur
     db.add(ModuleTestAttempt(id=attempt_id, user_id=user_id, module_id=module_id, conversation_id=conversation_id))
     db.commit()
 
-    sys_msg = build_test_system_prompt(module_title=module.title, objectives=list(module.objectives or []))
+    sys_msg = build_test_system_prompt(module_title=module.title, objectives=list(module.objectives or []), compressed=True)
     db.add(
         Message(
             id=str(uuid4()),
@@ -646,6 +647,7 @@ async def start_learning_session(module_id: str, current_user: User = Depends(ge
         progress_best_score=float(prog.best_score) if prog else 0.0,
         progress_attempts=int(prog.attempts_count) if prog else 0,
         progress_passed=bool(prog.passed) if prog else False,
+        compressed=True,  # Use compressed prompt for 150 token constraint
     )
     db.add(
         Message(
@@ -761,6 +763,7 @@ async def stream_learning(
     agent.state.stream = True
     agent.state.history = pairs
     agent.state.metadata["system_prompt"] = system
+    agent.state.metadata["max_tokens"] = 150  # Token budget for fast inference
 
     async def gen():
         # Debug/trace: emit the exact system prompt the agent will use.
@@ -836,7 +839,7 @@ async def stream_test(
             .first()
         )
         if module is not None:
-            system = build_test_system_prompt(module_title=module.title, objectives=list(module.objectives or []))
+            system = build_test_system_prompt(module_title=module.title, objectives=list(module.objectives or []), compressed=True)
             db.add(
                 Message(
                     id=str(uuid4()),
@@ -859,6 +862,7 @@ async def stream_test(
     agent.state.stream = True
     agent.state.history = pairs
     agent.state.metadata["system_prompt"] = system
+    agent.state.metadata["max_tokens"] = 150  # Token budget for fast inference
 
     async def gen():
         # Debug/trace: emit the exact system prompt the agent will use.
