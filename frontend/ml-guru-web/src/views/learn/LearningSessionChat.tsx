@@ -107,11 +107,15 @@ export const LearningSessionChat = () => {
       } else if (msg.role === 'assistant' && pendingUser) {
         // Preserve metadata if it exists, or use metadata from database
         const existingMetadata = existingMetadataMap.get(pendingUser.id) || {}
-        const dbMetadata = msg.interaction_metadata || {}
-        
-        // Debug: log metadata to see what we're getting
-        if (dbMetadata && Object.keys(dbMetadata).length > 0) {
-          console.log('Found metadata in DB for message:', msg.id, dbMetadata)
+        // Handle both parsed object and potential string (defensive)
+        let dbMetadata = msg.interaction_metadata || {}
+        if (typeof dbMetadata === 'string') {
+          try {
+            dbMetadata = JSON.parse(dbMetadata)
+          } catch (e) {
+            console.warn('Failed to parse interaction_metadata:', e)
+            dbMetadata = {}
+          }
         }
         
         newInteractions.push({
