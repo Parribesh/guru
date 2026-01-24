@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from agents.core.llm import LLM
 from agents.core.registry import AgentRegistry
 from agents.rag_agent.text_extractor import extract_text_from_path, UnsupportedDocumentTypeError
-
+from typing import AsyncIterator
 
 class ChatGraphState(TypedDict, total=False):
     user_input: str
@@ -17,7 +17,9 @@ class ChatGraphState(TypedDict, total=False):
     context: str
     prompt: str
     answer: str
-
+    stream: bool
+    answer_stream: AsyncIterator[str]
+    system_prompt: str
 
 def build_chat_graph(
     *,
@@ -97,7 +99,8 @@ def build_chat_graph(
     def _build_prompt_no_rag(state: ChatGraphState) -> Dict[str, Any]:
         query = state.get("query") or ""
         history_text = _format_history(state.get("history") or [])
-        prompt = "You are a helpful assistant.\n\n"
+        sys_prompt = (state.get("system_prompt") or "").strip() or "You are a helpful assistant."
+        prompt = f"{sys_prompt}\n\n"
         if history_text:
             prompt += f"Conversation so far:\n{history_text}\n\n"
         prompt += f"User: {query}\nAssistant:"
@@ -108,7 +111,8 @@ def build_chat_graph(
         context = state.get("context") or ""
         history_text = _format_history(state.get("history") or [])
 
-        prompt = "You are a helpful assistant. Use the provided context if it is relevant.\n\n"
+        sys_prompt = (state.get("system_prompt") or "").strip() or "You are a helpful assistant. Use the provided context if it is relevant."
+        prompt = f"{sys_prompt}\n\n"
         if context:
             prompt += f"Context:\n{context}\n\n"
         if history_text:
@@ -118,8 +122,15 @@ def build_chat_graph(
 
     def _answer(state: ChatGraphState) -> Dict[str, Any]:
         prompt = state.get("prompt") or ""
-        answer = llm.generate(prompt)
-        return {"answer": answer}
+        is_stream = state.get("stream") or False
+        if is_stream:
+            async def stream():
+                async for chunk in llm.stream(prompt):
+                    yield chunk
+            return {"answer": None, "answer_stream": stream()}
+        else:
+            answer = llm.generate(prompt)
+            return {"answer": answer}
 
     # Prefer LangGraph if available; fall back to a tiny local runner if it's not installed.
     try:

@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { loginRequestSchema, registerRequestSchema, type AuthFormData } from '../../schemas/authSchemas'
 import { login, register } from '../../api/auth_api'
 
-export const AuthForm = () => {
+export const AuthForm = ({ onAuthSuccess }: { onAuthSuccess?: () => void }) => {
     const [form, setForm] = useState<AuthFormData>({
         email: '',
         password: '',
@@ -11,6 +12,7 @@ export const AuthForm = () => {
     const [isLoading, setIsLoading] = useState(false)
     const [isLogin, setIsLogin] = useState(true)
     const [errors, setErrors] = useState<Partial<Record<keyof AuthFormData, string>>>({})
+    const navigate = useNavigate()
 
     const validateAndSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault()
@@ -30,10 +32,13 @@ export const AuthForm = () => {
                 await register(validatedRegisterForm)
             }
             setIsLoading(false)
-        } catch (error: any) {
+            onAuthSuccess?.()
+            navigate('/courses', { replace: true })
+        } catch (error: unknown) {
             setIsLoading(false)
-            console.error('Submission error:', error.message)
-            setErrors({ email: error.response.data.detail || 'An error occurred' })
+            const err = error as { message?: string; response?: { data?: { detail?: string } } }
+            console.error('Submission error:', err?.message)
+            setErrors({ email: err?.response?.data?.detail || 'An error occurred' })
         }
     }
 

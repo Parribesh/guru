@@ -29,4 +29,22 @@ def build_registry() -> AgentRegistry:
         ),
     )
 
+    # Role-specific chat agents (same engine, different responsibility/prompts per route).
+    registry.register(
+        "tutor",
+        lambda: ChatAgent(
+            name="TutorAgent",
+            llm=llm,
+            registry=registry,
+        ),
+    )
+    registry.register(
+        "tester",
+        lambda: ChatAgent(
+            name="TestAgent",
+            llm=llm,
+            registry=registry,
+        ),
+    )
+
     return registry

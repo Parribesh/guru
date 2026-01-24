@@ -12,6 +12,11 @@ from api.config import get_db
 
 
 def get_current_user(access_token: Optional[str] = Cookie(None), db: Session = Depends(get_db)) -> User | None:
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing token",
+        )
 
     payload = verify_token(access_token)
     if payload is None or payload.sub is None:

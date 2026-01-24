@@ -35,7 +35,9 @@ def create_access_token(data: AuthTokenPayload) -> str:
     """Create a JWT access token."""
     return encode(data.model_dump(), SECRET_KEY, algorithm=ALGORITHM)
 
-def verify_token(token: str) -> AuthTokenPayload:
+def verify_token(token: Optional[str]) -> AuthTokenPayload:
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
     try:
         payload = decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return AuthTokenPayload(**payload)
