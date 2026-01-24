@@ -20,6 +20,7 @@ class ChatGraphState(TypedDict, total=False):
     stream: bool
     answer_stream: AsyncIterator[str]
     system_prompt: str
+    max_tokens: Optional[int]  # Token budget constraint (e.g., 150)
 
 def build_chat_graph(
     *,
@@ -98,8 +99,27 @@ def build_chat_graph(
 
     def _build_prompt_no_rag(state: ChatGraphState) -> Dict[str, Any]:
         query = state.get("query") or ""
-        history_text = _format_history(state.get("history") or [])
+        history = state.get("history") or []
         sys_prompt = (state.get("system_prompt") or "").strip() or "You are a helpful assistant."
+        
+        # Use token budget management if max_tokens is set
+        max_tokens = state.get("max_tokens")
+        if max_tokens:
+            try:
+                import sys
+                from pathlib import Path
+                # Add project root to path for imports
+                project_root = Path(__file__).parent.parent.parent.parent
+                if str(project_root) not in sys.path:
+                    sys.path.insert(0, str(project_root))
+                from api.utils.token_budget import build_constrained_prompt
+                prompt = build_constrained_prompt(sys_prompt, history, query, max_tokens)
+                return {"prompt": prompt}
+            except (ImportError, Exception):
+                pass  # Fall back to original if token_budget not available
+        
+        # Original behavior (no token constraint)
+        history_text = _format_history(history)
         prompt = f"{sys_prompt}\n\n"
         if history_text:
             prompt += f"Conversation so far:\n{history_text}\n\n"
@@ -109,9 +129,67 @@ def build_chat_graph(
     def _build_prompt_with_rag(state: ChatGraphState) -> Dict[str, Any]:
         query = state.get("query") or ""
         context = state.get("context") or ""
-        history_text = _format_history(state.get("history") or [])
-
+        history = state.get("history") or []
+        
         sys_prompt = (state.get("system_prompt") or "").strip() or "You are a helpful assistant. Use the provided context if it is relevant."
+        
+        # Use token budget management if max_tokens is set
+        max_tokens = state.get("max_tokens")
+        if max_tokens:
+            try:
+                import sys
+                from pathlib import Path
+                # Add project root to path for imports
+                project_root = Path(__file__).parent.parent.parent.parent
+                if str(project_root) not in sys.path:
+                    sys.path.insert(0, str(project_root))
+                from api.utils.token_budget import truncate_text, estimate_tokens
+                # Reserve tokens for context
+                context_tokens = estimate_tokens(context)
+                query_tokens = estimate_tokens(query)
+                formatting_overhead = 20
+                available = max_tokens - context_tokens - query_tokens - formatting_overhead
+                
+                if available > 30:  # Only if we have room
+                    # Truncate context if needed
+                    if context_tokens > available * 0.4:  # Context gets 40% of available
+                        context = truncate_text(context, int(available * 0.4))
+                    
+                    # Build constrained prompt with context
+                    sys_and_history_budget = available - estimate_tokens(context)
+                    compressed_sys = truncate_text(sys_prompt, int(sys_and_history_budget * 0.4))
+                    
+                    # Simple history: keep last 1 exchange (will be replaced by semantic retrieval)
+                    history_budget = int(sys_and_history_budget * 0.6)
+                    truncated_history = []
+                    if history:
+                        last_user, last_assistant = history[-1]
+                        pair_tokens = estimate_tokens(last_user) + estimate_tokens(last_assistant)
+                        if pair_tokens <= history_budget:
+                            truncated_history = [(last_user, last_assistant)]
+                        else:
+                            user_budget = history_budget // 2
+                            assistant_budget = history_budget // 2
+                            truncated_history = [
+                                (truncate_text(last_user, user_budget), truncate_text(last_assistant, assistant_budget))
+                            ]
+                    
+                    history_text = "\n".join([f"User: {u}\nAssistant: {a}" for u, a in truncated_history]) if truncated_history else ""
+                    
+                    parts = [compressed_sys]
+                    if context:
+                        parts.append(f"\nContext:\n{context}")
+                    if history_text:
+                        parts.append(f"\nConversation:\n{history_text}")
+                    parts.append(f"\nUser: {query}\nAssistant:")
+                    
+                    prompt = "\n".join(parts)
+                    return {"prompt": prompt}
+            except (ImportError, Exception):
+                pass  # Fall back to original
+        
+        # Original behavior (no token constraint)
+        history_text = _format_history(history)
         prompt = f"{sys_prompt}\n\n"
         if context:
             prompt += f"Context:\n{context}\n\n"
