@@ -93,11 +93,14 @@ export const LearningSessionChat = () => {
     let pendingUser: Message | null = null
 
     // Preserve metadata from existing interactions by creating a map
+    // Use interaction ID as key (user_id_assistant_id) for better matching
     const existingMetadataMap = new Map<string, InteractionMetadata>()
     interactions.forEach((interaction) => {
-      const key = interaction.userMessage.id
-      if (interaction.metadata.retrievedHistory || interaction.metadata.systemPrompt) {
-        existingMetadataMap.set(key, interaction.metadata)
+      if (interaction.assistantMessage) {
+        const key = `${interaction.userMessage.id}_${interaction.assistantMessage.id}`
+        if (interaction.metadata.retrievedHistory || interaction.metadata.systemPrompt) {
+          existingMetadataMap.set(key, interaction.metadata)
+        }
       }
     })
 
@@ -106,7 +109,9 @@ export const LearningSessionChat = () => {
         pendingUser = msg
       } else if (msg.role === 'assistant' && pendingUser) {
         // Preserve metadata if it exists, or use metadata from database
-        const existingMetadata = existingMetadataMap.get(pendingUser.id) || {}
+        const interactionKey = `${pendingUser.id}_${msg.id}`
+        const existingMetadata = existingMetadataMap.get(interactionKey) || {}
+        
         // Handle both parsed object and potential string (defensive)
         let dbMetadata = msg.interaction_metadata || {}
         if (typeof dbMetadata === 'string') {
@@ -118,8 +123,9 @@ export const LearningSessionChat = () => {
           }
         }
         
+        // Merge: existing (from state) > database > undefined
         newInteractions.push({
-          id: `${pendingUser.id}_${msg.id}`,
+          id: interactionKey,
           userMessage: pendingUser,
           assistantMessage: msg,
           metadata: {
@@ -134,7 +140,7 @@ export const LearningSessionChat = () => {
 
     // Handle orphaned user message
     if (pendingUser) {
-      const existingMetadata = existingMetadataMap.get(pendingUser.id) || {}
+      const existingMetadata = existingMetadataMap.get(`${pendingUser.id}_pending`) || {}
       newInteractions.push({
         id: `${pendingUser.id}_pending`,
         userMessage: pendingUser,
@@ -271,8 +277,47 @@ export const LearningSessionChat = () => {
       inFlightRef.current = false
       setLoading(false)
       setStreamingContent('')
-      currentInteractionIdRef.current = null
+      
+      // Preserve metadata from current interaction before refreshing
+      // The metadata was set via SSE events and should be in state
+      const currentInteraction = interactions.find(i => i.id === interactionId)
+      const preservedMetadata = currentInteraction?.metadata
+      
+      // Refresh messages to get final assistant message from DB
+      // The buildInteractionsFromMessages will try to preserve metadata,
+      // but we'll also restore it after refresh to be safe
       refreshMessages()
+      
+      // After refresh completes, restore metadata if it was lost
+      // This handles the case where DB doesn't have metadata yet or it wasn't loaded
+      if (preservedMetadata && (preservedMetadata.retrievedHistory || preservedMetadata.systemPrompt)) {
+        setTimeout(() => {
+          setInteractions((prev) =>
+            prev.map((interaction) => {
+              if (interaction.id === interactionId) {
+                // Only restore if metadata is missing
+                const needsRestore = 
+                  (!interaction.metadata.retrievedHistory && preservedMetadata.retrievedHistory) ||
+                  (!interaction.metadata.systemPrompt && preservedMetadata.systemPrompt)
+                
+                if (needsRestore) {
+                  return {
+                    ...interaction,
+                    metadata: {
+                      ...interaction.metadata,
+                      retrievedHistory: interaction.metadata.retrievedHistory || preservedMetadata.retrievedHistory,
+                      systemPrompt: interaction.metadata.systemPrompt || preservedMetadata.systemPrompt,
+                    }
+                  }
+                }
+              }
+              return interaction
+            })
+          )
+        }, 200) // Give time for refresh to complete
+      }
+      
+      currentInteractionIdRef.current = null
     })
 
     source.onerror = (event) => {
