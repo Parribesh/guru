@@ -312,7 +312,7 @@ async def stream_chat(
                         role="assistant",
                         content=assistant_text,
                         seq=_next_seq(conversation_id, db),
-                        metadata=message_metadata if message_metadata else None,
+                        interaction_metadata=message_metadata if message_metadata else None,
                     )
                 )
                 db.commit()
@@ -882,7 +882,7 @@ async def stream_learning(
                         role="assistant",
                         content=text,
                         seq=_next_seq(conversation_id, db),
-                        metadata=message_metadata if message_metadata else None,
+                        interaction_metadata=message_metadata if message_metadata else None,
                     )
                 )
                 db.commit()
@@ -1023,7 +1023,7 @@ async def stream_test(
                         role="assistant",
                         content=text,
                         seq=_next_seq(convo_id, db),
-                        metadata=message_metadata if message_metadata else None,
+                        interaction_metadata=message_metadata if message_metadata else None,
                     )
                 )
                 db.commit()

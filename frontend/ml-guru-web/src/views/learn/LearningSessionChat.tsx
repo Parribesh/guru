@@ -107,7 +107,7 @@ export const LearningSessionChat = () => {
       } else if (msg.role === 'assistant' && pendingUser) {
         // Preserve metadata if it exists, or use metadata from database
         const existingMetadata = existingMetadataMap.get(pendingUser.id) || {}
-        const dbMetadata = msg.metadata || {}
+        const dbMetadata = msg.interaction_metadata || {}
         newInteractions.push({
           id: `${pendingUser.id}_${msg.id}`,
           userMessage: pendingUser,

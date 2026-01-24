@@ -31,7 +31,7 @@ export type Message = {
     content: string
     seq: number
     created_at: string
-    metadata?: {
+    interaction_metadata?: {
         retrieved_history?: string
         system_prompt?: string
         [key: string]: any

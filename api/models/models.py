@@ -40,7 +40,7 @@ class Message(Base):
     content = Column(Text, nullable=False)
     seq = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    metadata = Column(JSON, nullable=True)  # Store interaction metadata (retrieved_history, etc.)
+    interaction_metadata = Column(JSON, nullable=True)  # Store interaction metadata (retrieved_history, etc.)
 
 
 class Course(Base):
