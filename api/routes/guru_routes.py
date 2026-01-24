@@ -245,9 +245,10 @@ async def stream_chat(
         db.commit()
 
     # Persist user message.
+    user_msg_id = str(uuid4())
     db.add(
         Message(
-            id=str(uuid4()),
+            id=user_msg_id,
             conversation_id=conversation_id,
             role="user",
             content=validated_chat_request.message,
@@ -262,6 +263,7 @@ async def stream_chat(
     agent.state.history = _load_history_pairs(conversation_id, db)
     agent.state.metadata["system_prompt"] = system_prompt
     agent.state.metadata["max_tokens"] = 150  # Token budget for fast inference
+    agent.state.metadata["conversation_id"] = conversation_id  # For semantic history retrieval
 
     async def stream_generator():
         if created_new_conversation:
@@ -285,9 +287,10 @@ async def stream_chat(
         else:
             assistant_text = "".join(assistant_chunks)
             if assistant_text:
+                assistant_msg_id = str(uuid4())
                 db.add(
                     Message(
-                        id=str(uuid4()),
+                        id=assistant_msg_id,
                         conversation_id=conversation_id,
                         role="assistant",
                         content=assistant_text,
@@ -295,6 +298,14 @@ async def stream_chat(
                     )
                 )
                 db.commit()
+                
+                # Store exchange in history vector store
+                try:
+                    from api.utils.history_manager import store_exchange_from_messages
+                    store_exchange_from_messages(conversation_id, user_msg_id, assistant_msg_id, db)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Failed to store exchange: {e}")
         yield "event: end\ndata: END\n\n"
     return StreamingResponse(
         stream_generator(),
@@ -759,11 +770,25 @@ async def stream_learning(
         elif m.role == "assistant" and pending_user is not None:
             pairs.append((pending_user, m.content))
             pending_user = None
+    # Store user message first
+    user_msg_id = str(uuid4())
+    db.add(
+        Message(
+            id=user_msg_id,
+            conversation_id=conversation_id,
+            role="user",
+            content=validated.message,
+            seq=_next_seq(conversation_id, db),
+        )
+    )
+    db.commit()
+    
     agent = registry.get("chat")
     agent.state.stream = True
     agent.state.history = pairs
     agent.state.metadata["system_prompt"] = system
     agent.state.metadata["max_tokens"] = 150  # Token budget for fast inference
+    agent.state.metadata["conversation_id"] = conversation_id  # For semantic history retrieval
 
     async def gen():
         # Debug/trace: emit the exact system prompt the agent will use.
@@ -777,9 +802,10 @@ async def stream_learning(
         finally:
             text = "".join(chunks)
             if text:
+                assistant_msg_id = str(uuid4())
                 db.add(
                     Message(
-                        id=str(uuid4()),
+                        id=assistant_msg_id,
                         conversation_id=conversation_id,
                         role="assistant",
                         content=text,
@@ -787,6 +813,14 @@ async def stream_learning(
                     )
                 )
                 db.commit()
+                
+                # Store exchange in history vector store
+                try:
+                    from api.utils.history_manager import store_exchange_from_messages
+                    store_exchange_from_messages(conversation_id, user_msg_id, assistant_msg_id, db)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Failed to store exchange: {e}")
             yield "event: end\ndata: END\n\n"
 
     return StreamingResponse(
@@ -817,9 +851,10 @@ async def stream_test(
     validated = ChatRequestSchema(**data)
     convo_id = attempt.conversation_id
 
+    user_msg_id = str(uuid4())
     db.add(
         Message(
-            id=str(uuid4()),
+            id=user_msg_id,
             conversation_id=convo_id,
             role="user",
             content=validated.message,
@@ -858,11 +893,25 @@ async def stream_test(
         elif m.role == "assistant" and pending_user is not None:
             pairs.append((pending_user, m.content))
             pending_user = None
+    # Store user message first
+    user_msg_id = str(uuid4())
+    db.add(
+        Message(
+            id=user_msg_id,
+            conversation_id=convo_id,
+            role="user",
+            content=validated.message,
+            seq=_next_seq(convo_id, db),
+        )
+    )
+    db.commit()
+    
     agent = registry.get("chat")
     agent.state.stream = True
     agent.state.history = pairs
     agent.state.metadata["system_prompt"] = system
     agent.state.metadata["max_tokens"] = 150  # Token budget for fast inference
+    agent.state.metadata["conversation_id"] = convo_id  # For semantic history retrieval
 
     async def gen():
         # Debug/trace: emit the exact system prompt the agent will use.
@@ -876,9 +925,10 @@ async def stream_test(
         finally:
             text = "".join(chunks)
             if text:
+                assistant_msg_id = str(uuid4())
                 db.add(
                     Message(
-                        id=str(uuid4()),
+                        id=assistant_msg_id,
                         conversation_id=convo_id,
                         role="assistant",
                         content=text,
@@ -886,6 +936,14 @@ async def stream_test(
                     )
                 )
                 db.commit()
+                
+                # Store exchange in history vector store
+                try:
+                    from api.utils.history_manager import store_exchange_from_messages
+                    store_exchange_from_messages(convo_id, user_msg_id, assistant_msg_id, db)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Failed to store exchange: {e}")
             yield "event: end\ndata: END\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")

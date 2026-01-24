@@ -53,6 +53,7 @@ class ChatAgent(BaseAgent):
             answer_stream=None,
             system_prompt=str(self.state.metadata.get("system_prompt") or ""),
             max_tokens=self.state.metadata.get("max_tokens"),  # Token budget constraint (e.g., 150)
+            conversation_id=self.state.metadata.get("conversation_id"),  # For semantic history retrieval
         )
 
     def execute(self, plan: Any) -> Union[str, AsyncIterator[str]]:

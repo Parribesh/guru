@@ -21,6 +21,7 @@ class ChatGraphState(TypedDict, total=False):
     answer_stream: AsyncIterator[str]
     system_prompt: str
     max_tokens: Optional[int]  # Token budget constraint (e.g., 150)
+    conversation_id: Optional[str]  # For semantic history retrieval
 
 def build_chat_graph(
     *,
@@ -101,10 +102,11 @@ def build_chat_graph(
         query = state.get("query") or ""
         history = state.get("history") or []
         sys_prompt = (state.get("system_prompt") or "").strip() or "You are a helpful assistant."
+        conversation_id = state.get("conversation_id")  # For semantic history retrieval
         
-        # Use token budget management if max_tokens is set
+        # Use semantic history retrieval if max_tokens and conversation_id are set
         max_tokens = state.get("max_tokens")
-        if max_tokens:
+        if max_tokens and conversation_id:
             try:
                 import sys
                 from pathlib import Path
@@ -112,11 +114,68 @@ def build_chat_graph(
                 project_root = Path(__file__).parent.parent.parent.parent
                 if str(project_root) not in sys.path:
                     sys.path.insert(0, str(project_root))
+                from api.utils.history_store import get_history_store
+                from api.utils.token_budget import estimate_tokens, compress_system_prompt, truncate_text
+                
+                # Calculate available budget for history
+                query_tokens = estimate_tokens(query)
+                formatting_overhead = 15
+                available_for_system_and_history = max_tokens - query_tokens - formatting_overhead
+                
+                # Allocate budget: 40% system, 60% history
+                system_budget = int(available_for_system_and_history * 0.4)
+                history_budget = available_for_system_and_history - system_budget
+                
+                # Compress system prompt
+                compressed_system = compress_system_prompt(sys_prompt, system_budget)
+                
+                # Retrieve relevant history using semantic search
+                history_store = get_history_store()
+                retrieved_history = history_store.retrieve_relevant_history(
+                    query=query,
+                    conversation_id=conversation_id,
+                    max_tokens=history_budget,
+                    k=10,
+                    include_last=True
+                )
+                
+                # Build prompt with retrieved history
+                parts = [compressed_system]
+                
+                if retrieved_history:
+                    history_text = "\n".join([
+                        f"User: {u}\nAssistant: {a}"
+                        for u, a in retrieved_history
+                    ])
+                    parts.append(f"\nConversation:\n{history_text}")
+                
+                parts.append(f"\nUser: {query}\nAssistant:")
+                prompt = "\n".join(parts)
+                
+                # Verify we're within budget
+                final_tokens = estimate_tokens(prompt)
+                if final_tokens > max_tokens * 1.1:
+                    prompt = truncate_text(prompt, max_tokens)
+                
+                return {"prompt": prompt}
+            except (ImportError, Exception) as e:
+                # Fall back to simple truncation if semantic retrieval fails
+                import logging
+                logging.getLogger(__name__).warning(f"Semantic history retrieval failed: {e}, falling back to simple truncation")
+        
+        # Fallback: Use token budget management if max_tokens is set (without semantic retrieval)
+        if max_tokens:
+            try:
+                import sys
+                from pathlib import Path
+                project_root = Path(__file__).parent.parent.parent.parent
+                if str(project_root) not in sys.path:
+                    sys.path.insert(0, str(project_root))
                 from api.utils.token_budget import build_constrained_prompt
                 prompt = build_constrained_prompt(sys_prompt, history, query, max_tokens)
                 return {"prompt": prompt}
             except (ImportError, Exception):
-                pass  # Fall back to original if token_budget not available
+                pass  # Fall back to original
         
         # Original behavior (no token constraint)
         history_text = _format_history(history)
