@@ -150,17 +150,24 @@ def build_chat_graph(
                 # Store in state metadata for routes to emit
                 state["retrieved_history"] = "\n\n".join(history_display) if history_display else ""
                 
-                # Build prompt with retrieved history
-                parts = [compressed_system]
+                # Build prompt with retrieved history embedded in context
+                # Include retrieved history as part of the context/memory
+                context_parts = [compressed_system]
                 
                 if retrieved_history:
                     history_text = "\n".join([
                         f"User: {u}\nAssistant: {a}"
                         for u, a in retrieved_history
                     ])
-                    parts.append(f"\nConversation:\n{history_text}")
+                    # Embed history as memory/context in the system prompt area
+                    context_parts.append(f"\n\nPrevious conversation context (memory):\n{history_text}")
                 
-                parts.append(f"\nUser: {query}\nAssistant:")
+                # Combine system prompt and history as the full context
+                full_context = "\n".join(context_parts)
+                
+                # Build final prompt
+                parts = [full_context]
+                parts.append(f"\n\nCurrent user question:\nUser: {query}\nAssistant:")
                 prompt = "\n".join(parts)
                 
                 # Verify we're within budget

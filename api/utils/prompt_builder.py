@@ -56,11 +56,13 @@ def build_tutor_system_prompt(
     Build tutor system prompt. If compressed=True, creates a minimal version for token-constrained inference.
     """
     if compressed:
-        # Ultra-compressed version (~30-40 tokens)
+        # Compressed version (~40-50 tokens) - includes essential context
         obj_short = ", ".join(objectives[:3]) if objectives else "module objectives"
         status = "passed" if progress_passed else "learning"
+        course_context = f"{course_title} ({course_subject})" if course_title and course_subject else course_title or course_subject or "course"
         return (
-            f"Tutor for {user_name}. Module {module_order_index}: {module_title}. "
+            f"Tutor for {user_name}. Course: {course_context}. "
+            f"Module {module_order_index}: {module_title}. "
             f"Objectives: {obj_short}. Status: {status}. "
             f"Be concise: explain briefly, give 1 example, ask 1 question."
         )
