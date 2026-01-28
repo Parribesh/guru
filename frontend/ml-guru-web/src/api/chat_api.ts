@@ -1,20 +1,4 @@
 import { axiosInstance } from '../config/axiosConfig'
-import { chatRequestSchema, chatResponseSchema, type ChatRequestType, type ChatResponseType } from '../schemas/restSchemas'
-
-export const runChatAgent = async (runAgentRequest: ChatRequestType): Promise<ChatResponseType> => {
-    const validatedRequest = chatRequestSchema.parse(runAgentRequest)
-    const response = await axiosInstance.post('/guru/chat', validatedRequest)
-    const validatedResponse = chatResponseSchema.parse(response.data)
-    return validatedResponse
-}
-
-export type ChatHistoryItem = { user: string; assistant: string }
-export type ChatHistoryResponse = { history: ChatHistoryItem[] }
-
-export const fetchChatHistory = async (): Promise<ChatHistoryResponse> => {
-    const response = await axiosInstance.get('/guru/chat/history')
-    return response.data as ChatHistoryResponse
-}
 
 export type Conversation = {
     id: string

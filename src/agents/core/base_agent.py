@@ -66,9 +66,22 @@ class BaseAgent(ABC):
     def _before_run(self, input: str):
         # If the caller already preloaded history (e.g. from DB/session),
         # do not clobber it with in-memory history.
+        # Only load history if memory is provided and not NoMemory
         if self.memory and not self.state.history:
-            self.state.history = self.memory.load()
+            try:
+                # Check if memory has a load method (NoMemory returns empty list, which is fine)
+                history = self.memory.load()
+                if history:  # Only set if memory actually has history
+                    self.state.history = history
+            except Exception:
+                # If memory doesn't support loading or is NoMemory, that's fine
+                pass
 
     def _after_run(self, input: str, result: Union[str, AsyncIterator[str]]):
-        if self.memory: 
-            self.memory.save(input, str(result))
+        # Only save if memory is provided and not NoMemory
+        if self.memory:
+            try:
+                self.memory.save(input, str(result))
+            except Exception:
+                # If memory doesn't support saving (e.g., NoMemory), that's fine
+                pass

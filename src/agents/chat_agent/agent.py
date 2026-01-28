@@ -44,16 +44,43 @@ class ChatAgent(BaseAgent):
         self.state.stream = stream
 
     def plan(self, input: str) -> Any:
-        # Plan is the initial graph state. RAG usage is decided inside the LangGraph router.
+        """
+        Plan the agent's response.
+        
+        - Retrieves relevant memory (history) from vector store using semantic search
+        - Includes system prompt and memory in the plan
+        - Memory is retrieved based on semantic similarity to current query
+        """
+        # If memory is vector-based, set query for semantic retrieval
+        if hasattr(self.memory, 'set_query'):
+            self.memory.set_query(input)
+        
+        # Load memory (will use semantic search if vector-based)
+        memory_history = self.memory.load() if self.memory else []
+        
+        # Use memory history if available, otherwise fall back to state history
+        history = memory_history if memory_history else self.state.history
+        
+        # Get system prompt and other metadata
+        system_prompt = str(self.state.metadata.get("system_prompt") or "")
+        max_tokens = self.state.metadata.get("max_tokens")
+        conversation_id = self.state.metadata.get("conversation_id")
+        
+        # Store metadata for later emission (system prompt + retrieved memory)
+        self.state.metadata["_plan_metadata"] = {
+            "system_prompt": system_prompt,
+            "retrieved_memory": memory_history,
+        }
+        
         return ChatGraphState(
             user_input=input,
-            history=self.state.history,
+            history=history,
             doc_paths=self.state.doc_paths,
             stream=self.state.stream,
             answer_stream=None,
-            system_prompt=str(self.state.metadata.get("system_prompt") or ""),
-            max_tokens=self.state.metadata.get("max_tokens"),  # Token budget constraint (e.g., 150)
-            conversation_id=self.state.metadata.get("conversation_id"),  # For semantic history retrieval
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            conversation_id=conversation_id,
         )
 
     def execute(self, plan: Any) -> Union[str, AsyncIterator[str]]:
@@ -67,6 +94,34 @@ class ChatAgent(BaseAgent):
         return answer
 
     async def execute_stream(self, plan: Any) -> AsyncIterator[str]:
+        """
+        Execute plan with streaming, yielding metadata first, then chunks.
+        
+        Yields:
+            - First: metadata events (system_prompt, memory_retrieved) as SSE format
+            - Then: LLM response chunks
+        """
+        import json
+        
+        # Yield metadata first (system prompt and retrieved memory)
+        plan_metadata = self.state.metadata.get("_plan_metadata", {})
+        system_prompt = plan_metadata.get("system_prompt", "")
+        retrieved_memory = plan_metadata.get("retrieved_memory", [])
+        
+        # Format memory for display
+        if retrieved_memory:
+            memory_text = "\n\n".join([
+                f"User: {u}\nAssistant: {a}"
+                for u, a in retrieved_memory
+            ])
+            # Yield memory_retrieved event as SSE
+            yield f"event: memory_retrieved\ndata: {json.dumps({'history': memory_text})}\n\n"
+        
+        # Yield system_prompt event as SSE
+        if system_prompt:
+            yield f"event: system_prompt\ndata: {json.dumps({'system_prompt': system_prompt})}\n\n"
+        
+        # Now proceed with normal execution
         if not isinstance(plan, dict):
             # fallback: treat as prompt string
             async for chunk in self.llm.stream(str(plan)):

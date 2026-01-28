@@ -100,25 +100,28 @@ def build_chat_graph(
         return {"context": context}
 
     def _build_prompt_no_rag(state: ChatGraphState) -> Dict[str, Any]:
-        query = state.get("query") or ""
-        history = state.get("history") or []
-        sys_prompt = (state.get("system_prompt") or "").strip() or "You are a helpful assistant."
-        conversation_id = state.get("conversation_id")  # For semantic history retrieval
+        """
+        Build prompt without RAG.
         
-        # Use semantic history retrieval if max_tokens and conversation_id are set
+        History is already retrieved by the agent's memory system in the plan method,
+        so we just use the history from state.
+        """
+        query = state.get("query") or ""
+        history = state.get("history") or []  # Already retrieved by memory system
+        sys_prompt = (state.get("system_prompt") or "").strip() or "You are a helpful assistant."
         max_tokens = state.get("max_tokens")
-        if max_tokens and conversation_id:
+        
+        # Use token budget management if max_tokens is set
+        if max_tokens:
             try:
                 import sys
                 from pathlib import Path
-                # Add project root to path for imports
                 project_root = Path(__file__).parent.parent.parent.parent
                 if str(project_root) not in sys.path:
                     sys.path.insert(0, str(project_root))
-                from api.utils.history_store import get_history_store
                 from api.utils.token_budget import estimate_tokens, compress_system_prompt, truncate_text
                 
-                # Calculate available budget for history
+                # Calculate available budget
                 query_tokens = estimate_tokens(query)
                 formatting_overhead = 15
                 available_for_system_and_history = max_tokens - query_tokens - formatting_overhead
@@ -130,43 +133,33 @@ def build_chat_graph(
                 # Compress system prompt
                 compressed_system = compress_system_prompt(sys_prompt, system_budget)
                 
-                # Retrieve relevant history using semantic search
-                history_store = get_history_store()
-                retrieved_history = history_store.retrieve_relevant_history(
-                    query=query,
-                    conversation_id=conversation_id,
-                    max_tokens=history_budget,
-                    k=10,
-                    include_last=True
-                )
+                # Format history (already retrieved by memory, just format it)
+                history_text = ""
+                if history:
+                    history_parts = []
+                    tokens_used = 0
+                    for u, a in history:
+                        pair_text = f"User: {u}\nAssistant: {a}"
+                        pair_tokens = estimate_tokens(pair_text)
+                        if tokens_used + pair_tokens <= history_budget:
+                            history_parts.append(pair_text)
+                            tokens_used += pair_tokens
+                        else:
+                            # Truncate last exchange if needed
+                            remaining = history_budget - tokens_used
+                            if remaining > 10:
+                                user_budget = remaining // 2
+                                assistant_budget = remaining // 2
+                                truncated_u = truncate_text(u, user_budget)
+                                truncated_a = truncate_text(a, assistant_budget)
+                                history_parts.append(f"User: {truncated_u}\nAssistant: {truncated_a}")
+                            break
+                    history_text = "\n".join(history_parts)
                 
-                # Store retrieved history in state for SSE emission
-                # Format history for display
-                history_display = []
-                if retrieved_history:
-                    for u, a in retrieved_history:
-                        history_display.append(f"User: {u}\nAssistant: {a}")
-                
-                # Store in state metadata for routes to emit
-                state["retrieved_history"] = "\n\n".join(history_display) if history_display else ""
-                
-                # Build prompt with retrieved history embedded in context
-                # Include retrieved history as part of the context/memory
-                context_parts = [compressed_system]
-                
-                if retrieved_history:
-                    history_text = "\n".join([
-                        f"User: {u}\nAssistant: {a}"
-                        for u, a in retrieved_history
-                    ])
-                    # Embed history as memory/context in the system prompt area
-                    context_parts.append(f"\n\nPrevious conversation context (memory):\n{history_text}")
-                
-                # Combine system prompt and history as the full context
-                full_context = "\n".join(context_parts)
-                
-                # Build final prompt
-                parts = [full_context]
+                # Build prompt
+                parts = [compressed_system]
+                if history_text:
+                    parts.append(f"\n\nPrevious conversation context (memory):\n{history_text}")
                 parts.append(f"\n\nCurrent user question:\nUser: {query}\nAssistant:")
                 prompt = "\n".join(parts)
                 
@@ -177,25 +170,10 @@ def build_chat_graph(
                 
                 return {"prompt": prompt}
             except (ImportError, Exception) as e:
-                # Fall back to simple truncation if semantic retrieval fails
                 import logging
-                logging.getLogger(__name__).warning(f"Semantic history retrieval failed: {e}, falling back to simple truncation")
+                logging.getLogger(__name__).warning(f"Token budget management failed: {e}, falling back to simple format")
         
-        # Fallback: Use token budget management if max_tokens is set (without semantic retrieval)
-        if max_tokens:
-            try:
-                import sys
-                from pathlib import Path
-                project_root = Path(__file__).parent.parent.parent.parent
-                if str(project_root) not in sys.path:
-                    sys.path.insert(0, str(project_root))
-                from api.utils.token_budget import build_constrained_prompt
-                prompt = build_constrained_prompt(sys_prompt, history, query, max_tokens)
-                return {"prompt": prompt}
-            except (ImportError, Exception):
-                pass  # Fall back to original
-        
-        # Original behavior (no token constraint)
+        # Fallback: Simple formatting (no token constraint)
         history_text = _format_history(history)
         prompt = f"{sys_prompt}\n\n"
         if history_text:

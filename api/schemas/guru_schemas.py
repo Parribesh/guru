@@ -113,35 +113,6 @@ class CourseModulesResponse(BaseModel):
     modules: list[ModuleResponse]
 
 
-class StartModuleTestResponse(BaseModel):
-    attempt_id: str
-    conversation_id: str
-    greeting: Optional[str] = None
-
-
-class GradeModuleTestResponse(BaseModel):
-    attempt_id: str
-    score: float
-    passed: bool
-    feedback: Optional[dict] = None
-
-
 class StartSyllabusRunResponse(BaseModel):
     run_id: str
 
-
-class SyllabusRunStatusResponse(BaseModel):
-    run_id: str
-    course_id: str
-    status: str
-    phase: Optional[str] = None
-    updated_at: str
-    result: Optional[dict] = None
-    critic: Optional[dict] = None
-    error: Optional[str] = None
-
-
-class StartLearningSessionResponse(BaseModel):
-    session_id: str
-    conversation_id: str
-    greeting: Optional[str] = None

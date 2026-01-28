@@ -23,6 +23,8 @@ dependencies = [
     "python-pptx",
     "striprtf",
     "beautifulsoup4",
+    "pytest",
+    "pytest-asyncio",
 ]
 
 [tool.setuptools]
@@ -30,3 +32,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"

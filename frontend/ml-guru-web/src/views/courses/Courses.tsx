@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, Link } from 'react-router-dom'
 import { axiosInstance } from '../../config/axiosConfig'
 import { API_URL } from '../../config/config'
 
@@ -44,7 +44,7 @@ export const Courses = () => {
   const [busy, setBusy] = useState(false)
 
   // Syllabus builder (streamed)
-  const [, setSyllabusRunId] = useState<string | null>(null)
+  const [syllabusRunId, setSyllabusRunId] = useState<string | null>(null)
   const [syllabusPhase, setSyllabusPhase] = useState<string | null>(null)
   const [syllabusStatus, setSyllabusStatus] = useState<'idle' | 'running' | 'completed' | 'failed'>('idle')
   const [genLog, setGenLog] = useState('')
@@ -161,16 +161,30 @@ export const Courses = () => {
       type ModulesData = { modules?: DraftModule[] }
       type CriticData = { approved?: boolean; issues?: string[]; revised_modules?: DraftModule[] }
 
-      const onAny = (event: MessageEvent) => {
+      // Listen for metadata_update events (standardized session event)
+      es.addEventListener('metadata_update', (event: MessageEvent) => {
         try {
           const payload = JSON.parse(event.data as string) as SsePayload
-          if (payload.phase) setSyllabusPhase(payload.phase)
+          // Update phase whenever it's provided
+          if (payload.phase) {
+            setSyllabusPhase(payload.phase)
+          }
+          
+          // Handle phase_start events
+          if (payload.type === 'phase_start') {
+            // Phase is already set above, but we can add additional handling if needed
+            console.log(`Phase started: ${payload.phase}`)
+          }
+          
+          // Handle token events
           if (payload.type === 'token') {
             const d = (payload.data as TokenData) || {}
             const t = d.t ?? ''
             if (payload.phase === 'generate') setGenLog((p) => p + t)
             if (payload.phase === 'critic') setCriticLog((p) => p + t)
           }
+          
+          // Handle result events
           if (payload.type === 'result') {
             if (payload.phase === 'generate' || payload.phase === 'revise') {
               const d = (payload.data as ModulesData) || {}
@@ -185,6 +199,8 @@ export const Courses = () => {
               })
             }
           }
+          
+          // Handle done events
           if (payload.type === 'done') {
             setSyllabusStatus('completed')
             es.close()
@@ -193,24 +209,21 @@ export const Courses = () => {
             loadCourses()
           }
         } catch (e) {
-          console.error('failed to parse syllabus stream event', e)
+          console.error('failed to parse syllabus stream event', e, event)
         }
-      }
-
-      es.addEventListener('phase_start', onAny)
-      es.addEventListener('token', onAny)
-      es.addEventListener('result', onAny)
-      es.addEventListener('done', onAny)
+      })
 
       es.addEventListener('error', (ev) => {
         console.error('syllabus error event', ev)
         setSyllabusStatus('failed')
       })
 
-      es.addEventListener('end', () => {
+      es.addEventListener('session_ended', () => {
         es.close()
         if (syllabusEsRef.current === es) syllabusEsRef.current = null
         if (syllabusStatus === 'running') setSyllabusStatus('completed')
+        loadCourseDetail(courseId)
+        loadCourses()
       })
 
       es.onerror = (ev) => {
@@ -246,8 +259,8 @@ export const Courses = () => {
   const startLearning = async (moduleId: string) => {
     setBusy(true)
     try {
-      const r = await axiosInstance.post(`/guru/modules/${moduleId}/learn/start`)
-      const data = r.data as { session_id: string; conversation_id: string; greeting?: string }
+      const r = await axiosInstance.post(`/guru/sessions?session_type=learning&module_id=${moduleId}`)
+      const data = r.data as { session_id: string; conversation_id: string; context?: any }
       // Redirect to dedicated learning session chat view
       navigate(`/learn/${data.conversation_id}`, { replace: false })
     } finally {
@@ -401,14 +414,24 @@ export const Courses = () => {
                     <div className="text-sm font-semibold">Syllabus Builder</div>
                     <div className="text-xs text-gray-500">Generate → Critic → Revise → Finalize (streamed)</div>
                   </div>
-                  <button
-                    disabled={!selectedCourseId || busy}
-                    className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-gray-300"
-                    onClick={startSyllabusRun}
-                    type="button"
-                  >
-                    {syllabusStatus === 'running' ? 'Running…' : 'Run syllabus builder'}
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      disabled={!selectedCourseId || busy}
+                      className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-gray-300"
+                      onClick={startSyllabusRun}
+                      type="button"
+                    >
+                      {syllabusStatus === 'running' ? 'Running…' : 'Run syllabus builder'}
+                    </button>
+                    {syllabusRunId && (
+                      <Link
+                        to={`/dashboard/${syllabusRunId}`}
+                        className="rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700"
+                      >
+                        View Dashboard
+                      </Link>
+                    )}
+                  </div>
                 </div>
 
                 <div className="mt-3">

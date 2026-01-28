@@ -6,6 +6,7 @@ import { AuthForm } from './views/auth/AuthForm'
 import { axiosInstance } from './config/axiosConfig'
 import { Courses } from './views/courses/Courses'
 import LearningSessionChat from './views/learn/LearningSessionChat'
+import { AgentDashboard } from './views/dashboard/AgentDashboard'
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
@@ -64,6 +65,14 @@ function App() {
         >
           Courses
         </Link>
+        {isLoggedIn && (
+          <Link
+            to="/dashboard"
+            className="rounded-md bg-blue-100 px-3 py-2 text-sm font-semibold text-blue-900 hover:bg-blue-200"
+          >
+            Agent Dashboard
+          </Link>
+        )}
       </div>
 
       <Routes>
@@ -108,6 +117,24 @@ function App() {
           element={
             <Protected>
               <LearningSessionChat />
+            </Protected>
+          }
+        />
+
+        <Route
+          path="/dashboard"
+          element={
+            <Protected>
+              <AgentDashboard />
+            </Protected>
+          }
+        />
+
+        <Route
+          path="/dashboard/:sessionId"
+          element={
+            <Protected>
+              <AgentDashboard />
             </Protected>
           }
         />

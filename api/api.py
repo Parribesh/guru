@@ -2,7 +2,10 @@ from fastapi import FastAPI
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes.auth_routes import auth_routes
-from api.routes.guru_routes import guru_routes
+from api.routes.conversation_routes import conversation_routes
+from api.routes.course_routes import course_routes
+from api.routes.session_routes import session_routes
+from api.routes.syllabus_routes import syllabus_routes
 from api.config import create_db 
 from api.utils.logger import configure_logging, set_request_id, clear_request_id
 from fastapi import Request
@@ -70,7 +73,10 @@ def read_root():
     return {"message": "ML-Guru is Healthy"}
 
 app.include_router(auth_routes, prefix="/auth")
-app.include_router(guru_routes, prefix="/guru")
+app.include_router(conversation_routes, prefix="/guru")
+app.include_router(course_routes, prefix="/guru")
+app.include_router(session_routes, prefix="/guru")
+app.include_router(syllabus_routes, prefix="/guru")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
