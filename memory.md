@@ -2,7 +2,7 @@
 
 ## 1. App overview
 - **Stack**: FastAPI, SQLAlchemy, LangGraph/agents, Ollama LLM, ChromaDB (optional RAG).
-- **Core flows**: Auth → Courses → Syllabus (draft → confirm) → Sessions (learning/test/chat/syllabus) → Module progression.
+- **Core flows**: Auth → Courses → Syllabus (draft → confirm, separate endpoints) → Sessions (learning/test/chat only) → Module progression.
 
 ---
 
@@ -12,7 +12,7 @@
 - **Course**: id, user_id, title, subject, goals, syllabus_draft (JSON: `{modules: [...]}`), syllabus_confirmed (bool). No Module rows until confirm.
 - **Module**: id, course_id, title, order_index, objectives (JSON list), estimated_minutes. Created only on syllabus confirm.
 - **ModuleProgress**: id, user_id, module_id, best_score, attempts_count, passed, passed_at, updated_at. One per (user, module); created on confirm.
-- **Session** (api/models/session.py): id, user_id, session_type (learning|test|chat|syllabus), status (active|paused|completed|cancelled), conversation_id, module_id?, course_id?, agent_name, agent_metadata (e.g. system_prompt), session_state (e.g. progress snapshot), session_metadata, started_at, ended_at, last_activity_at.
+- **Session** (api/models/session.py): id, user_id, session_type (learning|test|chat), status (active|paused|completed|cancelled), conversation_id, module_id?, course_id?, agent_name, agent_metadata (e.g. system_prompt), session_state (e.g. progress snapshot), session_metadata, started_at, ended_at, last_activity_at. Syllabus generation does not use Session.
 - **Conversation**: id, user_id, parent_conversation_id?, forked_from_message_id?; holds Message(s).
 - **Message** (api/models/models.py; table `messages`): id, conversation_id, role (user|assistant|system|tool), content, seq, created_at, interaction_metadata (JSON: retrieved_history, system_prompt, etc.). Canonical store for all chat/tutor/test turns; one row per turn.
 - **SyllabusRun**: id, user_id, course_id, status, phase, result (JSON modules), error. Tracks one syllabus generation run.
@@ -20,43 +20,32 @@
 
 ---
 
-## 3. Syllabus generation (agentic pipeline)
+## 3. Syllabus generation (SyllabusAgent stream)
 
-**Goal**: Build a modular, extensible syllabus from terminal outcomes → atomic skills → prerequisite DAG → sequenced modules → calibration → validation. Output is structured (Pydantic/JSON), deterministic, machine-usable.
+**Goal**: Generate a syllabus (concepts by level → 3 draft modules) via a single agent run, streamed as SSE for UI progress.
 
-**Architecture**: Multi-step pipeline; each stage has single responsibility, structured input, structured output, independently testable.
+**Architecture**: SyllabusAgent (BaseAgent + LangGraph) in src/agents/syllabus_agent/agent.py. One node: concepts (ConceptGenerator from agentic/stages). Agent runs via registry "syllabus"; **SyllabusService** (api/services/syllabus_service.py) calls `agent.run_stream(input_str)` and maps each chunk to SSE. No Session or Conversation.
 
-**Stages** (agents.syllabus_agent.agentic):
-1. **LearningOutcomeGenerator** (LLM): course_title, subject, goals, target_level, time_budget → LearningOutcomeSet (6–15 terminal outcomes).
-2. **SkillDecompositionAgent** (LLM): LearningOutcomeSet → SkillSet (atomic skills with outcome_ids, prerequisite_skill_ids). No flat topic list.
-3. **PrerequisiteGraphBuilder** (pure): SkillSet → DependencyGraph (DAG via networkx; edges = prerequisite → dependent). Topological sort gives learning order.
-4. **ModuleSequencer** (pure): DependencyGraph + SkillSet + time_budget → CurriculumModules. Topological sort + clustering into 6–10 modules; objectives from skill descriptions.
-5. **DepthAndDifficultyCalibrator** (pure): CurriculumModules → CurriculumModules with depth_level (foundation/core/intermediate/advanced) and difficulty_score (0–1) by position.
-6. **CurriculumValidator** (pure): outcomes + skills + graph + modules → ValidationResult (valid, coverage_issues, progression_issues, gap_issues, revision_hints). Can trigger revision loop.
-7. **PersonalizationAgent** (optional): CurriculumModules + UserProfile → adjusted modules (default: pass-through).
+**Event stream** (SyllabusAgent.run_stream → SyllabusService): Each chunk is JSON `{ "event_type", "stage", "data" }`. event_type: `phase_start`, `task_update`, `done`. Service emits synthetic `module_generated` per module. All sent as SSE **metadata_update** (payload: phase, type, data). SyllabusEvent rows persisted. Final event **run_ended** (run_id).
 
-**Pipeline logic**: Skills are atomic and dependency-aware; DAG models prerequisites; modules produced via topological sort + clustering; validation can request revisions; avoid vague topics.
+**Output**: 3 modules (Beginner, Intermediate, Advanced) from ConceptListByLevel; stored in course.syllabus_draft and SyllabusRun.result.
 
-**Entry point**: `generate_syllabus(course, target_level, time_budget, user_profile)` in agents.syllabus_agent.agentic. Returns SyllabusPipelineResult (modules for syllabus_draft, validation, outcome_ids, skill_ids, dependency_graph).
+**Optional**: agents.syllabus_agent.agentic has `generate_syllabus(course, event_callback=...)` (pipeline.py) for direct/callable use.
 
-**Schemas**: LearningOutcome, LearningOutcomeSet; Skill, SkillSet; PrerequisiteEdge, DependencyGraph; CurriculumModule, CurriculumModules; ValidationResult; UserProfile; SyllabusPipelineInput, SyllabusPipelineResult.
-
-**Integration**: Session-based syllabus flow (`_stream_syllabus_generation`) calls `generate_syllabus(course, ...)` from agents.syllabus_agent.agentic; event_callback adapts stage_start/stage_complete to pipeline_stage_start/complete for SSE. UI can preview syllabus before finalization.
+**Integration**: Standalone syllabus: POST /guru/courses/{id}/syllabus/run (creates SyllabusRun, returns run_id); GET /guru/syllabus/runs/{run_id}/stream (SyllabusService.stream_run) → SSE. On success: syllabus_draft persisted, run status=completed.
 
 ---
 
 ## 4. Sessions: design and lifecycle
 
-**Session types**: learning, test, chat, syllabus.
+**Session types**: learning, test, chat only. Syllabus generation is separate (see §3).
 
-- **Create** (POST /guru/sessions): Requires session_type; for syllabus requires course_id; for learning/test requires module_id (and thus course).  
+- **Create** (POST /guru/sessions): Requires session_type (learning|test|chat). Rejects syllabus with 400 and message to use POST /guru/courses/{id}/syllabus/run.  
   - Creates Conversation.  
   - Resolves Module/Course; for learning loads ModuleProgress, builds tutor system prompt via `build_tutor_system_prompt()` (compressed=True), stores in agent_metadata and session_state (module_progress snapshot).  
   - SessionService.create_session(..., session_type, conversation_id, module_id, course_id, agent_name, agent_metadata, session_state).
 
-- **Stream** (GET /guru/sessions/{id}/stream): SSE.  
-  - **Syllabus session**: `_stream_syllabus_generation(session)`. Gets/creates SyllabusRun, calls agentic `generate_syllabus(course, event_callback=...)`; event adapter writes SyllabusEvent, updates run.phase, pushes to queue; loop yields SSE. On success: run.result=modules, course.syllabus_draft persisted, session COMPLETED. On failure: run.status=failed, session CANCELLED.  
-  - **Other types**: Placeholder loop (keep-alive); real-time updates would be WebSocket/pub-sub later.
+- **Stream** (GET /guru/sessions/{id}/stream): SSE. Placeholder loop (keep-alive) for learning/test/chat; real-time updates would be WebSocket/pub-sub later.
 
 - **List/Get/End**: Standard CRUD; End sets status=COMPLETED and ended_at.
 
@@ -82,16 +71,16 @@
 
 - Auth: POST /auth/register (email, password, confirm_password), /auth/login, /auth/logout, GET /auth/me.  
 - Courses: GET/POST /guru/courses; POST /guru/courses/{id}/syllabus/confirm (draft → Module rows + ModuleProgress); GET /guru/courses/{id} (course + modules + per-module progress).  
-- Syllabus (legacy): POST /guru/courses/{id}/syllabus/start, GET .../stream (alternative to session-based syllabus).  
-- Sessions: POST /guru/sessions (create), POST /guru/sessions/{id}/messages (send message: persist user + assistant Message, sync to vector store), GET /guru/sessions/{id}/stream (SSE), GET /guru/sessions, GET /guru/sessions/{id}, POST /guru/sessions/{id}/end.  
+- Syllabus: POST /guru/courses/{id}/syllabus/run (creates SyllabusRun, returns run_id), GET /guru/syllabus/runs/{run_id}/stream (SSE; SyllabusService). No Session.  
+- Sessions: POST /guru/sessions (create learning/test/chat only), POST /guru/sessions/{id}/messages (send message), GET /guru/sessions/{id}/stream (SSE), GET /guru/sessions, GET /guru/sessions/{id}, POST /guru/sessions/{id}/end.  
 - Conversations: under /guru (list, messages, fork).
 
 ---
 
 ## 7. Key files
 
-- Syllabus: src/agents/syllabus_agent/agentic/ (generate_syllabus, pipeline.py, stages/, schemas.py).  
-- Session: api/services/session_service.py (create, get, update_state, end, get_session_context, stream_session_events, _stream_syllabus_generation).  
+- Syllabus: src/agents/syllabus_agent/agent.py (SyllabusAgent, run_stream); agentic/ (ConceptGenerator, pipeline.generate_syllabus optional, schemas).  
+- Syllabus: api/services/syllabus_service.py (start_run, stream_run). Session: api/services/session_service.py (create, get, update_state, end, get_session_context, stream_session_events).  
 - Routes: api/routes/session_routes.py (create_session, stream_session), api/routes/course_routes.py (confirm_syllabus, get_course with progress).  
 - Prompts: api/utils/prompt_builder.py (tutor, critic, planner; syllabus prompts removed in favor of agentic).  
 - Models: api/models/ (__init__.py exports Message, Conversation, User, Course, Module, ModuleProgress, Session, etc.); api/models/models.py (DB tables); api/models/session.py (Session, SessionType, SessionStatus).
@@ -100,8 +89,8 @@
 
 ## 8. Conventions
 
-- Syllabus: always 6–10 modules; each 3–6 objectives, 30–120 min.  
-- Session for syllabus: type=SYLLABUS, course_id set; stream runs pipeline and emits SSE until done/failed.  
+- Syllabus: current output 3 modules (Beginner, Intermediate, Advanced) from ConceptListByLevel; each has objectives, estimated_minutes.  
+- Syllabus: standalone endpoints and SyllabusService; no Session. Sessions are for learning, test, chat only.  
 - Progress: one ModuleProgress per (user, module); session reads it for context and tutor prompt; progress is updated by assessment/completion flow, not by session stream itself.
 
 ---
@@ -137,7 +126,7 @@
 
 **How conversation history is created today**  
 1. **Conversation row**  
-   - Created when: (a) **POST /guru/sessions** (create session) — new Conversation(id=uuid, user_id), no Message rows. (b) **POST /guru/courses/{id}/syllabus/start** — same. (c) **POST /conversations/{id}/fork** — new Conversation with parent_conversation_id and forked_from_message_id.  
+   - Created when: (a) **POST /guru/sessions** (create session) — new Conversation(id=uuid, user_id), no Message rows. (b) **POST /guru/courses/{id}/syllabus/run** — creates SyllabusRun only (no Conversation). (c) **POST /conversations/{id}/fork** — new Conversation with parent_conversation_id and forked_from_message_id.  
    - So every new session or syllabus run gets an empty Conversation (no Message rows).
 
 2. **Message rows (the “history”)**  

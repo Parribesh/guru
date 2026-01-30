@@ -131,6 +131,14 @@ function App() {
         />
 
         <Route
+          path="/dashboard/syllabus-run/:runId"
+          element={
+            <Protected>
+              <AgentDashboard />
+            </Protected>
+          }
+        />
+        <Route
           path="/dashboard/:sessionId"
           element={
             <Protected>

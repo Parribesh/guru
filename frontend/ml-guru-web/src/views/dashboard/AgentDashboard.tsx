@@ -38,18 +38,23 @@ interface PipelineStatus {
   }
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 export function AgentDashboard() {
-  const { sessionId } = useParams<{ sessionId?: string }>()
+  const { sessionId, runId } = useParams<{ sessionId?: string; runId?: string }>()
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeSessions, setActiveSessions] = useState<Array<{ id: string; course_id: string; phase: string }>>([])
 
-  // Load active sessions if no sessionId provided
+  // Syllabus runs use /guru/syllabus/runs/:runId/stream; sessions use /guru/sessions/:sessionId/stream
+  const streamId = runId ?? sessionId
+  const isSyllabusRun = Boolean(runId)
+
+  // Load active sessions if no stream id provided (learning/test/chat sessions only; syllabus uses Courses page)
   useEffect(() => {
-    if (!sessionId) {
-      // Fetch active syllabus sessions
-      axiosInstance.get('/guru/sessions?session_type=syllabus&status=active')
+    if (!streamId) {
+      axiosInstance.get('/guru/sessions?status=active')
         .then((response) => {
           const data = response.data as { sessions: Array<{ id: string; course_id: string; phase: string }> }
           setActiveSessions(data.sessions || [])
@@ -60,14 +65,13 @@ export function AgentDashboard() {
       return
     }
 
-    // Connect to SSE stream
-    const eventSource = new EventSource(
-      `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/guru/sessions/${sessionId}/stream`,
-      { withCredentials: true }
-    )
+    const streamUrl = isSyllabusRun
+      ? `${API_BASE}/guru/syllabus/runs/${runId}/stream`
+      : `${API_BASE}/guru/sessions/${sessionId}/stream`
+    const eventSource = new EventSource(streamUrl, { withCredentials: true })
 
     eventSource.onopen = () => {
-      console.log('SSE connection opened for session:', sessionId)
+      console.log('SSE connection opened for', isSyllabusRun ? 'syllabus run' : 'session', streamId)
       setIsConnected(true)
       setError(null)
     }
@@ -160,7 +164,7 @@ export function AgentDashboard() {
             }
           })
         } else if (data.type === 'phase_start') {
-          // Handle phase start (agentic: phase=planning|generation|validation|finalize; or stage name)
+          // Handle phase start (SyllabusAgent: planning | finalize)
           const stage = data.phase || data.data?.stage
           console.log('🚀 Phase started:', stage)
           setPipelineStatus((prev) => {
@@ -170,85 +174,34 @@ export function AgentDashboard() {
               current_stage: data.phase || data.data?.stage || prev.current_stage,
             }
           })
+        } else if (data.type === 'done') {
+          // SyllabusAgent stream complete: finalize
+          console.log('✅ Syllabus generation done:', data.data)
+          setPipelineStatus((prev) => ({
+            ...prev || {
+              tasks: [],
+              current_stage: null,
+              total_tasks: 0,
+              completed_tasks: 0,
+              failed_tasks: 0,
+            },
+            current_stage: 'finalize',
+          }))
         }
       } catch (err) {
         console.error('❌ Error parsing metadata_update event:', err, event)
       }
     })
 
-    // Listen for all other event types
-    eventSource.addEventListener('pipeline_stage_start', (event) => {
-      try {
-        const data = JSON.parse((event as MessageEvent).data)
-        receivedEvents.push('pipeline_stage_start')
-        console.log('🚀 Pipeline stage started:', data)
-        setPipelineStatus((prev) => ({
-          ...prev || {
-            tasks: [],
-            current_stage: null,
-            total_tasks: 0,
-            completed_tasks: 0,
-            failed_tasks: 0,
-          },
-          current_stage: data.stage || prev?.current_stage,
-        }))
-      } catch (err) {
-        console.error('Error parsing pipeline_stage_start:', err)
-      }
+    eventSource.addEventListener('session_ended', () => {
+      receivedEvents.push('session_ended')
+      eventSource.close()
+      setIsConnected(false)
     })
-
-    eventSource.addEventListener('pipeline_stage_complete', (event) => {
-      try {
-        const data = JSON.parse((event as MessageEvent).data)
-        receivedEvents.push('pipeline_stage_complete')
-        console.log('✅ Pipeline stage completed:', data)
-      } catch (err) {
-        console.error('Error parsing pipeline_stage_complete:', err)
-      }
-    })
-
-    eventSource.addEventListener('module_generated', (event) => {
-      try {
-        const data = JSON.parse((event as MessageEvent).data)
-        receivedEvents.push('module_generated')
-        console.log('📦 Module generated event:', data)
-        // Update module progress
-        setPipelineStatus((prev) => {
-          if (!prev) return prev
-          return {
-            ...prev,
-            module_progress: {
-              current: data.module_index || 0,
-              total: data.total_modules || 0,
-              current_module: data.module_title,
-            },
-          }
-        })
-      } catch (err) {
-        console.error('Error parsing module_generated:', err)
-      }
-    })
-
-    eventSource.addEventListener('module_generation_failed', (event) => {
-      try {
-        const data = JSON.parse((event as MessageEvent).data)
-        receivedEvents.push('module_generation_failed')
-        console.error('❌ Module generation failed:', data)
-        // Update status to show error
-        setPipelineStatus((prev) => {
-          if (!prev) return prev
-          return {
-            ...prev,
-            module_progress: {
-              current: data.module_index || 0,
-              total: data.total_modules || 0,
-              current_module: data.module_title,
-            },
-          }
-        })
-      } catch (err) {
-        console.error('Error parsing module_generation_failed:', err)
-      }
+    eventSource.addEventListener('run_ended', () => {
+      receivedEvents.push('run_ended')
+      eventSource.close()
+      setIsConnected(false)
     })
 
     // Fallback: listen to all messages
@@ -274,7 +227,7 @@ export function AgentDashboard() {
       eventSource.close()
       setIsConnected(false)
     }
-  }, [sessionId])
+  }, [streamId, sessionId, runId])
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -299,8 +252,8 @@ export function AgentDashboard() {
     return `${duration}s`
   }
 
-  // If no sessionId, show session selector
-  if (!sessionId) {
+  // If no stream id, show session selector
+  if (!streamId) {
     return (
       <div className="p-6 max-w-4xl mx-auto">
         <div className="mb-6">
@@ -337,10 +290,10 @@ export function AgentDashboard() {
             </div>
           ) : (
             <div className="text-center py-12 text-gray-500">
-              <p className="mb-2">No active syllabus generation sessions found.</p>
+              <p className="mb-2">No active sessions.</p>
               <p className="text-sm">
                 <Link to="/courses" className="text-blue-600 hover:text-blue-800">
-                  Start a syllabus generation from the Courses page
+                  Start a learning session or syllabus generation from the Courses page
                 </Link>
               </p>
             </div>
@@ -356,7 +309,7 @@ export function AgentDashboard() {
         <div className="flex items-center justify-between mb-2">
           <div>
             <h2 className="text-3xl font-bold">Agent Dashboard</h2>
-            <p className="text-sm text-gray-600 mt-1">Session: {sessionId.substring(0, 12)}...</p>
+            <p className="text-sm text-gray-600 mt-1">{isSyllabusRun ? 'Syllabus run' : 'Session'}: {streamId.substring(0, 12)}...</p>
           </div>
           <Link
             to="/dashboard"

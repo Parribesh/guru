@@ -26,9 +26,9 @@ logger = configure_logging()
 
 @session_routes.post("/sessions")
 async def create_session(
-    session_type: str = Query(..., description="Type of session: learning, test, chat, syllabus"),
+    session_type: str = Query(..., description="Type of session: learning, test, chat"),
     module_id: str = Query(None, description="Module ID (for learning/test sessions)"),
-    course_id: str = Query(None, description="Course ID (for syllabus sessions)"),
+    course_id: str = Query(None, description="Course ID (optional)"),
     current_user: User = Depends(get_current_user),
     db: DBSession = Depends(get_db),
 ) -> dict:
@@ -56,15 +56,13 @@ async def create_session(
     agent_metadata = {}
     session_state = {}
     
-    # For syllabus sessions, course_id is required
+    # Syllabus is separate: use POST /guru/courses/{course_id}/syllabus/run and GET .../stream
     if session_type_enum == SessionType.SYLLABUS:
-        if not course_id:
-            raise HTTPException(status_code=400, detail="course_id is required for syllabus sessions")
-        course = db.query(Course).filter(Course.id == course_id, Course.user_id == user_id).first()
-        if not course:
-            raise HTTPException(status_code=404, detail="Course not found")
-        course_id = course.id
-    
+        raise HTTPException(
+            status_code=400,
+            detail="Use POST /guru/courses/{course_id}/syllabus/run for syllabus generation",
+        )
+
     if module_id:
         module = (
             db.query(Module)

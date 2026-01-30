@@ -1,19 +1,19 @@
 """
 Syllabus generation endpoints.
 
-These endpoints are wrappers around the session system for backward compatibility.
-All new code should use /guru/sessions endpoints directly.
+Standalone flow: no Session or Conversation. Creates SyllabusRun and streams
+via SyllabusService (SyllabusAgent.run_stream() → SSE metadata_update).
 """
 
-from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from api.config import get_db
-from api.models.models import Conversation, Course
+from api.models.models import Course
 from api.schemas.guru_schemas import StartSyllabusRunResponse
 from api.schemas.user_schemas import User
+from api.services.syllabus_service import SyllabusService
 from api.utils.auth import get_current_user
 from api.utils.common import get_db_user_id
 
@@ -27,46 +27,20 @@ async def start_syllabus_run(
     db: Session = Depends(get_db)
 ) -> StartSyllabusRunResponse:
     """
-    Start a syllabus generation run.
-    
-    Note: This now creates a session and returns session_id.
-    Use /guru/sessions/{session_id}/stream to stream the generation process.
+    Start a syllabus generation run for the course.
+    Returns run_id. Use GET /guru/syllabus/runs/{run_id}/stream to stream.
     """
-    from api.services.session_service import SessionService
-    from api.models.session import SessionType
-    
     assert current_user is not None
     user_id = get_db_user_id(current_user.email, db)
     course = db.query(Course).filter(Course.id == course_id, Course.user_id == user_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
-    
-    # Create conversation for the session
-    conversation_id = str(uuid4())
-    db.add(Conversation(id=conversation_id, user_id=user_id))
-    db.commit()
-    
-    # Create syllabus session
-    session_service = SessionService(db)
-    session = session_service.create_session(
-        user_id=user_id,
-        session_type=SessionType.SYLLABUS,
-        conversation_id=conversation_id,
-        course_id=course_id,
-        agent_name="syllabus_generator",
-        agent_metadata={
-            "course_title": course.title,
-            "course_subject": course.subject,
-            "course_goals": course.goals,
-        },
-        session_state={
-            "status": "running",
-            "phase": "generate",
-        },
-    )
-    
-    # Return session_id (which acts as run_id for backward compatibility)
-    return StartSyllabusRunResponse(run_id=session.id)
+    try:
+        syllabus_service = SyllabusService(db)
+        run_id = syllabus_service.start_run(course_id, user_id)
+        return StartSyllabusRunResponse(run_id=run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @syllabus_routes.get("/syllabus/runs/{run_id}/stream")
@@ -76,29 +50,18 @@ async def stream_syllabus_run(
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     """
-    Stream syllabus generation + critic evaluation in phases.
-    
-    Note: This endpoint is now a wrapper around the session stream.
-    The run_id is treated as a session_id for backward compatibility.
-    Use /guru/sessions/{session_id}/stream for the standardized endpoint.
+    Stream syllabus generation for the run. SSE: metadata_update (phase, type, data), run_ended.
     """
-    from api.services.session_service import SessionService
-    
     assert current_user is not None
     user_id = get_db_user_id(current_user.email, db)
-    
-    # Treat run_id as session_id
-    session_service = SessionService(db)
-    session = session_service.get_session(run_id, user_id)
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="Session/Run not found")
-    
-    # Stream through session system
+    syllabus_service = SyllabusService(db)
+    if not syllabus_service.get_run(run_id, user_id):
+        raise HTTPException(status_code=404, detail="Run not found")
+
     async def event_generator():
-        async for event in session_service.stream_session_events(run_id, user_id):
+        async for event in syllabus_service.stream_run(run_id, user_id):
             yield event
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",

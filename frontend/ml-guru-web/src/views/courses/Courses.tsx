@@ -184,7 +184,7 @@ export const Courses = () => {
             if (payload.phase === 'critic') setCriticLog((p) => p + t)
           }
           
-          // Handle result events (agentic: result on any phase; legacy: generate/revise/critic)
+          // Handle result events (legacy: generate/revise/critic)
           if (payload.type === 'result') {
             const d = payload.data as ModulesData & CriticData
             if (d?.modules && Array.isArray(d.modules)) setSyllabusModules(d.modules)
@@ -195,9 +195,11 @@ export const Courses = () => {
               })
             }
           }
-          
-          // Handle done events
+
+          // Handle done (SyllabusAgent stream: type=done, data.modules)
           if (payload.type === 'done') {
+            const d = payload.data as ModulesData
+            if (d?.modules && Array.isArray(d.modules)) setSyllabusModules(d.modules)
             setSyllabusStatus('completed')
             es.close()
             if (syllabusEsRef.current === es) syllabusEsRef.current = null
@@ -215,6 +217,14 @@ export const Courses = () => {
       })
 
       es.addEventListener('session_ended', () => {
+        es.close()
+        if (syllabusEsRef.current === es) syllabusEsRef.current = null
+        if (syllabusStatus === 'running') setSyllabusStatus('completed')
+        loadCourseDetail(courseId)
+        loadCourses()
+      })
+
+      es.addEventListener('run_ended', () => {
         es.close()
         if (syllabusEsRef.current === es) syllabusEsRef.current = null
         if (syllabusStatus === 'running') setSyllabusStatus('completed')
@@ -426,7 +436,7 @@ export const Courses = () => {
                     </button>
                     {syllabusRunId && (
                       <Link
-                        to={`/dashboard/${syllabusRunId}`}
+                        to={`/dashboard/syllabus-run/${syllabusRunId}`}
                         className="rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700"
                       >
                         View Dashboard
