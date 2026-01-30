@@ -25,6 +25,12 @@ dependencies = [
     "beautifulsoup4",
     "pytest",
     "pytest-asyncio",
+    "networkx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest-cov>=4.0",
 ]
 
 [tool.setuptools]
@@ -37,3 +43,9 @@ where = ["src"]
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "unit: fast tests with no external services (default for pytest)",
+    "integration: tests that hit real services (LLM, DB, API)",
+    "slow: long-running tests (syllabus pipeline, benchmarks)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]

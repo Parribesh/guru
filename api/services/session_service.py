@@ -254,7 +254,6 @@ class SessionService:
         """Stream syllabus generation process using robust multi-stage pipeline."""
         import json
         from api.models.models import Course, SyllabusRun, SyllabusEvent
-        # Removed unused imports - using SyllabusPipeline instead
         from datetime import datetime
         
         course = self.db.query(Course).filter(Course.id == session.course_id).first()
@@ -288,9 +287,6 @@ class SessionService:
         else:
             run_id = run.id
         
-        # Initialize the syllabus pipeline with agents
-        from api.services.syllabus_pipeline import SyllabusPipeline
-        
         def emit(phase: str | None, type_: str, data: dict | None = None):
             """Emit event and store in database."""
             try:
@@ -303,8 +299,6 @@ class SessionService:
                 )
                 self.db.add(event)
                 self.db.commit()
-                
-                # Update session state
                 if not session.session_state:
                     session.session_state = {}
                 session.session_state.update({
@@ -317,89 +311,61 @@ class SessionService:
                 self.db.commit()
             except Exception as e:
                 logger.error(f"Error in emit function for phase={phase}, type={type_}: {e}")
-                # Don't fail the whole process if event storage fails, but log it
-            
-            # Emit as SSE
             payload = {"phase": phase, "type": type_, "data": data}
             return f"event: {SessionEventType.METADATA_UPDATE.value}\ndata: {json.dumps(payload)}\n\n"
-        
+
         try:
-            # Use the new agent-based pipeline with course metadata
-            from api.services.syllabus_pipeline import SyllabusPipeline
-            
-            pipeline = SyllabusPipeline(self.db, course=course)
-            
-            # Create a queue for events and a way to yield them
             import asyncio
             from collections import deque
-            
+
             events_queue = deque()
             generation_done = False
-            modules_result = []
-            
-            def pipeline_event_handler(event_type: str, data: dict):
-                """Handle pipeline events and queue for SSE emission."""
-                nonlocal run
-                # Extract stage from data - handle both string and enum values
-                stage = data.get("stage", "unknown")
-                if hasattr(stage, 'value'):  # PipelineStage enum
-                    stage = stage.value
-                elif not isinstance(stage, str):
-                    stage = str(stage)
-                
-                logger.info(f"Pipeline event handler: type={event_type}, stage={stage}, data_keys={list(data.keys()) if isinstance(data, dict) else 'N/A'}")
-                
-                # Update run phase
-                if stage in ["planning", "generation", "validation", "refinement", "finalization"]:
-                    run.phase = stage
-                    run.updated_at = datetime.utcnow()
-                    self.db.add(run)
-                    self.db.commit()
-                
-                # Queue events for SSE emission
-                if event_type == "pipeline_stage_start":
-                    events_queue.append(("phase_start", stage, {}))
-                elif event_type == "pipeline_stage_complete":
-                    events_queue.append(("result", stage, data.get("result", {})))
-                elif event_type == "agent_task_update":
-                    # This is the key event for dashboard - includes full agent metadata
-                    # data is the full task_dict from pipeline
-                    logger.info(f"Queuing agent_task_update: stage={stage}, agent={data.get('agent_name', 'unknown')}, status={data.get('status', 'unknown')}, queue_size={len(events_queue)+1}")
-                    events_queue.append(("task_update", stage, data))
-                elif event_type == "module_generation_start":
-                    # Module generation start event
-                    logger.info(f"Queuing module_generation_start: module {data.get('module_index', '?')}/{data.get('total_modules', '?')} - {data.get('module_title', 'unknown')}")
-                    events_queue.append(("module_generation_start", "generation", data))
-                elif event_type == "module_generated":
-                    # Module generation progress event
-                    exec_time = data.get('execution_time_seconds', 0)
-                    logger.info(f"Queuing module_generated: module {data.get('module_index', '?')}/{data.get('total_modules', '?')} - {data.get('module_title', 'unknown')} (took {exec_time}s)")
-                    events_queue.append(("module_generated", "generation", data))
-                elif event_type == "module_generation_failed":
-                    # Module generation failure event
-                    logger.warning(f"Queuing module_generation_failed: module {data.get('module_index', '?')}/{data.get('total_modules', '?')} - {data.get('error', 'unknown error')}")
-                    events_queue.append(("module_generation_failed", "generation", data))
-                elif event_type == "pipeline_complete":
-                    events_queue.append(("done", "finalize", data))
-                elif event_type == "pipeline_error":
-                    events_queue.append(("error", "error", data))
-            
-            pipeline.event_callback = pipeline_event_handler
-            
-            # Start generation in background
-            async def generate_and_yield():
-                nonlocal generation_done, modules_result
+            syllabus_result_holder = []
+
+            async def run_syllabus_agent():
+                """Run SyllabusAgent (LangGraph); each chunk is agent-state event JSON."""
+                nonlocal generation_done, syllabus_result_holder, run
                 try:
-                    result = await pipeline.generate_syllabus(course)
-                    modules_result.append(result)
+                    agent = self.registry.get("syllabus")
+                    input_str = json.dumps({
+                        "course_title": course.title,
+                        "subject": course.subject,
+                        "goals": course.goals,
+                    })
+                    async for chunk in agent.run_stream(input_str):
+                        try:
+                            payload = json.loads(chunk)
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                        event_type = payload.get("event_type")
+                        stage = payload.get("stage", "planning")
+                        data = payload.get("data") or {}
+                        # Update run phase for frontend
+                        if stage in ("planning", "finalize"):
+                            run.phase = stage
+                            run.updated_at = datetime.utcnow()
+                            self.db.add(run)
+                            self.db.commit()
+                        events_queue.append((event_type, stage, data))
+                        if event_type == "done":
+                            from types import SimpleNamespace
+                            syllabus_result_holder.append(SimpleNamespace(modules=data.get("modules") or []))
+                            # Synthetic module_generated events for frontend
+                            modules = data.get("modules") or []
+                            for idx, mod in enumerate(modules, 1):
+                                events_queue.append(("module_generated", "generation", {
+                                    "module_index": idx,
+                                    "total_modules": len(modules),
+                                    "module_title": mod.get("title", ""),
+                                    "module": mod,
+                                }))
                 except Exception as e:
                     events_queue.append(("error", "error", {"error": str(e)}))
                 finally:
                     generation_done = True
-                    # Give a small delay to ensure any final events are queued
                     await asyncio.sleep(0.1)
-            
-            generation_task = asyncio.create_task(generate_and_yield())
+
+            generation_task = asyncio.create_task(run_syllabus_agent())
             
             # Yield events as they come - ensure we flush all events immediately
             last_event_time = asyncio.get_event_loop().time()
@@ -423,13 +389,11 @@ class SessionService:
                     # Use shorter sleep to check queue more frequently
                     await asyncio.sleep(0.01)
             
-            # Get final result
-            modules = modules_result[0] if modules_result else []
-            
-            # Hard failure if no modules generated
+            # Get final result (Stage 1 returns SyllabusPipelineResult with .modules = 3 items: Beginner, Intermediate, Advanced)
+            modules = syllabus_result_holder[0].modules if syllabus_result_holder else []
             if not modules:
-                logger.error("Syllabus generation produced no valid modules")
-                raise ValueError("Syllabus generation produced no valid modules")
+                logger.error("Syllabus generation produced no modules")
+                raise ValueError("Syllabus generation produced no modules")
             
             # Finalize: persist to Course as draft
             run.phase = "finalize"

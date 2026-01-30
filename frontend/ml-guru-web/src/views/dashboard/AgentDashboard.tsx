@@ -160,13 +160,14 @@ export function AgentDashboard() {
             }
           })
         } else if (data.type === 'phase_start') {
-          // Handle phase start
-          console.log('🚀 Phase started:', data.data?.stage || data.phase)
+          // Handle phase start (agentic: phase=planning|generation|validation|finalize; or stage name)
+          const stage = data.phase || data.data?.stage
+          console.log('🚀 Phase started:', stage)
           setPipelineStatus((prev) => {
             if (!prev) return prev
             return {
               ...prev,
-              current_stage: data.data?.stage || data.phase || prev.current_stage,
+              current_stage: data.phase || data.data?.stage || prev.current_stage,
             }
           })
         }

@@ -1,6 +1,7 @@
 from agents.core.registry import AgentRegistry
 from agents.chat_agent.agent import ChatAgent
 from agents.rag_agent.agent import RAGAgent
+from agents.syllabus_agent.agent import SyllabusAgent
 
 from infra.llm.ollama import OllamaLLM
 from infra.vector.chroma_store import ChromaStore
@@ -27,6 +28,11 @@ def build_registry() -> AgentRegistry:
             llm=llm,
             registry=registry,
         ),
+    )
+
+    registry.register(
+        "syllabus",
+        lambda: SyllabusAgent(name="SyllabusAgent", llm=llm),
     )
 
     # Role-specific chat agents (same engine, different responsibility/prompts per route).

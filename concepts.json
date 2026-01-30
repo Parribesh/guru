@@ -1,0 +1,37 @@
+{
+  "course_title": "Intro to ML",
+  "subject": "Machine Learning",
+  "beginner": [
+    "Supervised Learning",
+    "Regression",
+    "Classification",
+    "Linear Regression",
+    "Decision Trees",
+    "Random Forests",
+    "Support Vector Machines",
+    "K-Nearest Neighbors",
+    "Gradient Boosting"
+  ],
+  "intermediate": [
+    "Deep Learning",
+    "Neural Networks",
+    "Convolutional Neural Networks",
+    "Recurrent Neural Networks",
+    "Long Short-Term Memory",
+    "Batch Normalization",
+    "Dropout",
+    "Activation Functions",
+    "Regularization Techniques"
+  ],
+  "advanced": [
+    "Natural Language Processing",
+    "Text Preprocessing",
+    "Feature Extraction",
+    "Dimensionality Reduction",
+    "Clustering Algorithms",
+    "Anomaly Detection",
+    "Ensemble Methods",
+    "Transfer Learning",
+    "Hyperparameter Tuning"
+  ]
+}

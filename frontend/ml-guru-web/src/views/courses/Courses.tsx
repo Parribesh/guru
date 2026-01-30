@@ -184,15 +184,11 @@ export const Courses = () => {
             if (payload.phase === 'critic') setCriticLog((p) => p + t)
           }
           
-          // Handle result events
+          // Handle result events (agentic: result on any phase; legacy: generate/revise/critic)
           if (payload.type === 'result') {
-            if (payload.phase === 'generate' || payload.phase === 'revise') {
-              const d = (payload.data as ModulesData) || {}
-              const mods = d.modules
-              if (Array.isArray(mods)) setSyllabusModules(mods)
-            }
-            if (payload.phase === 'critic') {
-              const d = (payload.data as CriticData) || {}
+            const d = payload.data as ModulesData & CriticData
+            if (d?.modules && Array.isArray(d.modules)) setSyllabusModules(d.modules)
+            if (payload.phase === 'critic' && d) {
               setCriticVerdict({
                 approved: Boolean(d.approved),
                 issues: Array.isArray(d.issues) ? d.issues : [],
@@ -328,10 +324,15 @@ export const Courses = () => {
   const syllabusProgressPct = useMemo(() => {
     if (syllabusStatus === 'idle') return 0
     if (syllabusStatus === 'failed') return 100
+    if (syllabusPhase === 'finalize' || syllabusStatus === 'completed') return 100
+    // Agentic pipeline phases: planning → generation → validation → finalization
+    if (syllabusPhase === 'planning') return 20
+    if (syllabusPhase === 'generation') return 50
+    if (syllabusPhase === 'validation' || syllabusPhase === 'finalization') return 75
+    // Legacy phases (if any)
     if (syllabusPhase === 'generate') return 25
     if (syllabusPhase === 'critic') return 65
     if (syllabusPhase === 'revise') return 85
-    if (syllabusPhase === 'finalize' || syllabusStatus === 'completed') return 100
     return 10
   }, [syllabusPhase, syllabusStatus])
 

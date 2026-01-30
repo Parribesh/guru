@@ -6,16 +6,17 @@ import json
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session as DBSession
 
 from api.config import get_db
-from api.models.models import Conversation, Module, Course, ModuleProgress
+from api.models.models import Conversation, Module, Course, ModuleProgress, Message
 from api.models.session import Session, SessionType, SessionStatus
-from api.models.models import Message
+from api.schemas.guru_schemas import SendMessageRequest, SendMessageResponse
 from api.schemas.user_schemas import User
 from api.utils.auth import get_current_user
-from api.utils.common import get_db_user_id, display_name, next_seq, syllabus_outline
+from api.utils.common import get_db_user_id, display_name, next_seq, syllabus_outline, iso_format
 from api.utils.prompt_builder import build_tutor_system_prompt
+from api.utils.history_manager import store_exchange_from_messages
 from api.services.session_service import SessionService, SessionEventType
 from api.utils.logger import configure_logging
 
@@ -29,10 +30,9 @@ async def create_session(
     module_id: str = Query(None, description="Module ID (for learning/test sessions)"),
     course_id: str = Query(None, description="Course ID (for syllabus sessions)"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: DBSession = Depends(get_db),
 ) -> dict:
-    """
-    Create a new session with full context.
+    """Create a new session with full context.
     
     Returns session ID and initial context.
     """
@@ -138,11 +138,101 @@ async def create_session(
     }
 
 
+@session_routes.post("/sessions/{session_id}/messages", response_model=SendMessageResponse)
+async def send_message(
+    session_id: str,
+    req: SendMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db),
+) -> SendMessageResponse:
+    """
+    Send a user message in a session, run the agent, persist both user and assistant
+    messages to the conversation, and sync the exchange to the vector history store.
+
+    Only allowed for ACTIVE learning, test, or chat sessions (not syllabus).
+    """
+    assert current_user is not None
+    user_id = get_db_user_id(current_user.email, db)
+
+    session_service = SessionService(db)
+    session = session_service.get_session(session_id, user_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.session_type == SessionType.SYLLABUS:
+        raise HTTPException(status_code=400, detail="Cannot send messages in a syllabus session; use stream for generation")
+    if session.status != SessionStatus.ACTIVE:
+        raise HTTPException(status_code=400, detail="Session is not active")
+
+    conversation_id = session.conversation_id
+    seq_user = next_seq(conversation_id, db)
+    user_msg_id = str(uuid4())
+    user_msg = Message(
+        id=user_msg_id,
+        conversation_id=conversation_id,
+        role="user",
+        content=req.content,
+        seq=seq_user,
+    )
+    db.add(user_msg)
+    db.commit()
+    db.refresh(user_msg)
+
+    # Get agent and configure for this conversation (VectorMemory + skip save; we sync after persist)
+    from api.bootstrap import build_registry
+    from agents.chat_agent.vector_memory import VectorMemory
+
+    registry = build_registry()
+    agent = registry.get(session.agent_name)
+    agent.memory = VectorMemory(
+        conversation_id=conversation_id,
+        agent_state=agent.state,
+    )
+    agent.state.metadata = dict(session.agent_metadata or {})
+    agent.state.metadata["_user_message_id"] = user_msg_id
+    agent.state.metadata["_message_seq"] = seq_user
+    agent.state.metadata["_skip_memory_save"] = True
+
+    # Run agent (sync) to get full assistant response
+    try:
+        answer = agent.run(req.content)
+        if answer is None:
+            answer = ""
+        answer = str(answer).strip()
+    except Exception as e:
+        logger.exception("Agent run failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Agent failed: {str(e)}")
+
+    seq_assistant = next_seq(conversation_id, db)
+    assistant_msg_id = str(uuid4())
+    assistant_msg = Message(
+        id=assistant_msg_id,
+        conversation_id=conversation_id,
+        role="assistant",
+        content=answer,
+        seq=seq_assistant,
+    )
+    db.add(assistant_msg)
+    db.commit()
+    db.refresh(assistant_msg)
+
+    store_exchange_from_messages(conversation_id, user_msg_id, assistant_msg_id, db)
+
+    session_service.update_session_state(session_id, {}, None)
+
+    return SendMessageResponse(
+        user_message_id=user_msg_id,
+        assistant_message_id=assistant_msg_id,
+        assistant_content=answer,
+        assistant_seq=seq_assistant,
+        created_at=iso_format(assistant_msg.created_at),
+    )
+
+
 @session_routes.get("/sessions/{session_id}/stream")
 async def stream_session(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: DBSession = Depends(get_db),
 ) -> StreamingResponse:
     """
     Stream session events and state updates.
@@ -186,7 +276,7 @@ async def list_sessions(
     session_type: str = Query(None, description="Filter by session type"),
     status: str = Query(None, description="Filter by status: active, completed, cancelled"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: DBSession = Depends(get_db),
 ) -> dict:
     """
     List sessions for the current user.
@@ -233,7 +323,7 @@ async def list_sessions(
 async def get_session(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: DBSession = Depends(get_db),
 ) -> dict:
     """Get current session state and context."""
     assert current_user is not None
@@ -253,7 +343,7 @@ async def get_session(
 async def end_session(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: DBSession = Depends(get_db),
 ) -> dict:
     """End a session."""
     assert current_user is not None

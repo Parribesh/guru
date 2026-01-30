@@ -56,6 +56,20 @@ class ForkResponse(BaseModel):
     conversation_id: str
 
 
+class SendMessageRequest(BaseModel):
+    """Body for POST /guru/sessions/{session_id}/messages."""
+    content: str
+
+
+class SendMessageResponse(BaseModel):
+    """Response after sending a message: assistant turn persisted and history synced."""
+    user_message_id: str
+    assistant_message_id: str
+    assistant_content: str
+    assistant_seq: int
+    created_at: str  # ISO format of assistant message
+
+
 # ----- Courses / Modules -----
 
 class CreateCourseRequest(BaseModel):

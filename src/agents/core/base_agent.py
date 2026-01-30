@@ -78,6 +78,9 @@ class BaseAgent(ABC):
                 pass
 
     def _after_run(self, input: str, result: Union[str, AsyncIterator[str]]):
+        # Skip save when caller persists messages and syncs to vector store (e.g. send-message route)
+        if getattr(self.state, "metadata", None) and self.state.metadata.get("_skip_memory_save"):
+            return
         # Only save if memory is provided and not NoMemory
         if self.memory:
             try:

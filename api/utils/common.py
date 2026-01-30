@@ -36,7 +36,16 @@ def display_name(current_user: User) -> str:
 
 
 def next_seq(conversation_id: str, db: Session) -> int:
-    """Get next sequence number for a conversation."""
+    """
+    Return the next sequence number for a conversation.
+
+    Looks up the Message with the highest seq for this conversation_id,
+    then returns last.seq + 1. If there are no messages yet, returns 1.
+
+    Use this when appending a new Message so turns stay ordered (e.g. user=seq N,
+    assistant=seq N+1). Not used by any route today; required once we add
+    a "send message" flow that persists Message rows.
+    """
     last = (
         db.query(Message)
         .filter(Message.conversation_id == conversation_id)
