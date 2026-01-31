@@ -170,10 +170,11 @@ export const Courses = () => {
             setSyllabusPhase(payload.phase)
           }
           
-          // Handle phase_start events
+          // Handle phase_start (state-derived: data = graph state with current_stage)
           if (payload.type === 'phase_start') {
-            // Phase is already set above, but we can add additional handling if needed
-            console.log(`Phase started: ${payload.phase}`)
+            const stage = payload.phase ?? (payload.data as { current_stage?: string })?.current_stage
+            if (stage) setSyllabusPhase(stage)
+            console.log(`Phase started: ${stage}`)
           }
           
           // Handle token events

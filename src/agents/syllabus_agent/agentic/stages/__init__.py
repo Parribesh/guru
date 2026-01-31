@@ -1,5 +1,3 @@
-"""Stage 1 only: ConceptGenerator (concepts by level)."""
+"""Stages removed for clean state. New design: per-module, next-concept-on-completion."""
 
-from agents.syllabus_agent.agentic.stages.concept_generator import ConceptGenerator
-
-__all__ = ["ConceptGenerator"]
+__all__: list[str] = []

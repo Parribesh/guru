@@ -20,19 +20,60 @@
 
 ---
 
-## 3. Syllabus generation (SyllabusAgent stream)
+## 3. Syllabus generation (clean state → new design)
 
-**Goal**: Generate a syllabus (concepts by level → 3 draft modules) via a single agent run, streamed as SSE for UI progress.
+**Clean state (current)**: SyllabusAgent is a stub in src/agents/syllabus_agent/agent.py. No full-course generation: execute_stream yields phase_start then done with empty modules and empty concepts_by_level. SyllabusService accepts empty modules and completes the run (result = {"modules": []}). ConceptGenerator, DependencyOrdering, and pipeline removed. Integration: POST /guru/courses/{id}/syllabus/run and GET /guru/syllabus/runs/{run_id}/stream still work; run completes with no syllabus.
 
-**Architecture**: SyllabusAgent (BaseAgent + LangGraph) in src/agents/syllabus_agent/agent.py. One node: concepts (ConceptGenerator from agentic/stages). Agent runs via registry "syllabus"; **SyllabusService** (api/services/syllabus_service.py) calls `agent.run_stream(input_str)` and maps each chunk to SSE. No Session or Conversation.
+**New design (to implement)**: Build the course gradually, per module. User is in a module (Beginner / Intermediate / Advanced); path makes the user proficient in **that module only**. When the user completes a concept, we ask the LLM for the **next concept** in order, passing the list of concepts already completed. So the LLM knows current module and completed concepts; it suggests the next one. No single “generate full course at once”; control per module.
 
-**Event stream** (SyllabusAgent.run_stream → SyllabusService): Each chunk is JSON `{ "event_type", "stage", "data" }`. event_type: `phase_start`, `task_update`, `done`. Service emits synthetic `module_generated` per module. All sent as SSE **metadata_update** (payload: phase, type, data). SyllabusEvent rows persisted. Final event **run_ended** (run_id).
+---
 
-**Output**: 3 modules (Beginner, Intermediate, Advanced) from ConceptListByLevel; stored in course.syllabus_draft and SyllabusRun.result.
+### 3.1 Final syllabus state (structure and session use)
 
-**Optional**: agents.syllabus_agent.agentic has `generate_syllabus(course, event_callback=...)` (pipeline.py) for direct/callable use.
+**Purpose**: The syllabus is the single source of truth for (1) what the course covers, (2) in what order, and (3) what each module’s learning objectives are. Sessions (learning, test, chat) and progression logic refer to this; the final state must contain everything they need.
 
-**Integration**: Standalone syllabus: POST /guru/courses/{id}/syllabus/run (creates SyllabusRun, returns run_id); GET /guru/syllabus/runs/{run_id}/stream (SyllabusService.stream_run) → SSE. On success: syllabus_draft persisted, run status=completed.
+**Where it lives**:
+- **Before confirm**: `course.syllabus_draft` (JSON). Same shape in `SyllabusRun.result`. Used by UI and by POST syllabus/confirm.
+- **After confirm**: **Module** rows (canonical); **ModuleProgress** per (user, module) for progression. `syllabus_outline` is derived from Module (order_index + title).
+
+**Canonical structure** (syllabus_draft / run.result):
+
+```json
+{
+  "modules": [
+    {
+      "title": "string",
+      "objectives": ["string"],
+      "estimated_minutes": number,
+      "dependencies": [{"concept": "string", "prerequisites": ["string"]}]
+    }
+  ],
+  "concepts_by_level": {
+    "beginner": ["string"],
+    "intermediate": ["string"],
+    "advanced": ["string"]
+  }
+}
+```
+
+- **modules** (required): Array order = progression order. Each module:
+  - **title**: Display name (e.g. Beginner, Intermediate, Advanced).
+  - **objectives**: Learning objectives / concept names **in learning order** (from DAG topological sort). Sessions use these in the tutor prompt and for scope.
+  - **estimated_minutes**: For UI and pacing.
+  - **dependencies**: DAG per module — list of `{ "concept": "X", "prerequisites": ["Y", "Z"] }` (from LLM). Tells you which concept depends on which; objectives order is derived from this. Sessions can use this for “prerequisite for X” or hints.
+  - On confirm: list index → Module.order_index (1-based); Module rows get title, order_index, objectives, estimated_minutes; ModuleProgress created per (user, module). (dependencies can stay in syllabus_draft for reference or be added to Module later.)
+- **concepts_by_level** (optional): Maps level names to concept lists. Enables sessions to reference “which concepts belong to which level” (e.g. tutor: “This module covers these Beginner concepts: …”). Currently produced by pipeline but not yet stored in syllabus_draft; can be added so sessions can consume it.
+
+**What sessions need when progressing**:
+- **Per module** (from Module after confirm): title, order_index, objectives, estimated_minutes. Learning/test session is scoped to one module_id; tutor prompt gets module_title, objectives, syllabus_outline.
+- **Per user**: ModuleProgress (best_score, attempts_count, passed) to gate “next module” and adapt tutor (progress_best_score, progress_attempts, progress_passed).
+- **Course-level**: syllabus_outline = "1. Title\n2. Title\n…" from Module (order_index, title) for tutor context; course title, subject, goals from Course.
+- **Optional**: concepts_by_level in syllabus_draft so tutor can reference “Beginner concepts: …” when in the first module.
+
+**Conventions**:
+- Module count: 3 in current pipeline (Beginner, Intermediate, Advanced); confirm creates one ModuleProgress per module per user.
+- Progression: linear by order_index; “next module” gated on current module passed (ModuleProgress.passed).
+- Syllabus generation must output the structure above so confirm and sessions have a single, consistent source.
 
 ---
 

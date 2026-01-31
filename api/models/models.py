@@ -108,12 +108,13 @@ class SyllabusRun(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     course_id = Column(String, ForeignKey("courses.id"), index=True, nullable=False)
     status = Column(String, nullable=False, default="running")  # running|completed|failed
-    phase = Column(String, nullable=True)  # generate|critic|revise|finalize
+    phase = Column(String, nullable=True)  # from state.current_stage: planning|concepts|finalize
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     result = Column(JSON, nullable=True)  # normalized modules
     critic = Column(JSON, nullable=True)  # critic verdict/report
     error = Column(Text, nullable=True)
+    state_snapshot = Column(JSON, nullable=True)  # latest LangGraph state for resume/replay
 
     user = relationship("User", backref="syllabus_runs", foreign_keys=[user_id])
     course = relationship("Course", backref="syllabus_runs", foreign_keys=[course_id])

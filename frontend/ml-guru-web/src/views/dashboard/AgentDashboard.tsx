@@ -40,6 +40,32 @@ interface PipelineStatus {
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+// Syllabus stages: 3 concept steps then 3 module steps (shown in UI)
+const STAGE_LABELS: Record<string, string> = {
+  planning: 'Planning',
+  concepts_beginner: 'Beginner concepts',
+  concepts_intermediate: 'Intermediate concepts',
+  concepts_advanced: 'Advanced concepts',
+  module_beginner: 'Beginner module',
+  module_intermediate: 'Intermediate module',
+  module_advanced: 'Advanced module',
+  finalize: 'Finalize',
+}
+const STAGE_ORDER = [
+  'planning',
+  'concepts_beginner',
+  'concepts_intermediate',
+  'concepts_advanced',
+  'module_beginner',
+  'module_intermediate',
+  'module_advanced',
+  'finalize',
+]
+
+function stageDisplayLabel(stage: string): string {
+  return STAGE_LABELS[stage] ?? stage.replace(/_/g, ' ')
+}
+
 export function AgentDashboard() {
   const { sessionId, runId } = useParams<{ sessionId?: string; runId?: string }>()
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null)
@@ -92,8 +118,46 @@ export function AgentDashboard() {
         receivedEvents.push(`metadata_update: ${data.type || 'unknown'}`)
         console.log('📥 Dashboard received metadata_update event:', data.type, data)
         
-        // Handle different event types
-        if (data.type === 'task_update' && data.data) {
+        // State-derived events: state_update has graph state (current_stage, concepts_by_level, modules)
+        if (data.type === 'state_update' && data.data) {
+          const state = data.data as { current_stage?: string; concepts_by_level?: { beginner?: string[]; intermediate?: string[]; advanced?: string[] }; modules?: unknown[] }
+          const concepts = state.concepts_by_level
+          const conceptsCount = concepts
+            ? (concepts.beginner?.length ?? 0) + (concepts.intermediate?.length ?? 0) + (concepts.advanced?.length ?? 0)
+            : 0
+          const taskData: AgentTask = {
+            agent_name: 'concepts',
+            stage: state.current_stage ?? 'concepts',
+            status: 'completed',
+            started_at: null,
+            completed_at: null,
+            error: null,
+            metadata: { concepts_count: conceptsCount, concepts_by_level: concepts },
+          }
+          console.log('✅ Processing state_update (state-derived) for stage:', taskData.stage)
+          setPipelineStatus((prev) => {
+            if (!prev) {
+              return {
+                tasks: [taskData],
+                current_stage: taskData.stage,
+                total_tasks: 1,
+                completed_tasks: 1,
+                failed_tasks: 0,
+              }
+            }
+            const existingIndex = prev.tasks.findIndex((t) => t.agent_name === taskData.agent_name && t.stage === taskData.stage)
+            const updatedTasks = existingIndex >= 0
+              ? [...prev.tasks].map((t, i) => (i === existingIndex ? { ...taskData, metadata: { ...t.metadata, ...taskData.metadata } } : t))
+              : [...prev.tasks, taskData]
+            return {
+              tasks: updatedTasks,
+              current_stage: taskData.stage || prev.current_stage,
+              total_tasks: updatedTasks.length,
+              completed_tasks: updatedTasks.filter((t) => t.status === 'completed').length,
+              failed_tasks: updatedTasks.filter((t) => t.status === 'failed').length,
+            }
+          })
+        } else if (data.type === 'task_update' && data.data) {
           const taskData = data.data as AgentTask
           console.log('✅ Processing task_update for agent:', taskData.agent_name, 'status:', taskData.status, 'stage:', taskData.stage)
           
@@ -328,7 +392,7 @@ export function AgentDashboard() {
         {pipelineStatus && (
           <div className="ml-auto flex items-center gap-4 text-sm text-gray-600">
             <div>
-              Stage: <span className="font-semibold capitalize">{pipelineStatus.current_stage || 'N/A'}</span>
+              Stage: <span className="font-semibold">{stageDisplayLabel(pipelineStatus.current_stage || '') || 'N/A'}</span>
             </div>
             {pipelineStatus.module_progress && (
               <div className="px-3 py-1 bg-blue-100 rounded">
@@ -394,9 +458,10 @@ export function AgentDashboard() {
               if (a.status === 'running' && b.status !== 'running') return -1
               if (a.status !== 'running' && b.status === 'running') return 1
               
-              const stageOrder = ['planning', 'generation', 'finalization']
-              const aStageIdx = stageOrder.indexOf(a.stage)
-              const bStageIdx = stageOrder.indexOf(b.stage)
+              const aStageIdx = STAGE_ORDER.indexOf(a.stage)
+              const bStageIdx = STAGE_ORDER.indexOf(b.stage)
+              const aIdxFallback = aStageIdx < 0 ? 999 : aStageIdx
+              const bIdxFallback = bStageIdx < 0 ? 999 : bStageIdx
               if (aStageIdx !== bStageIdx) return aStageIdx - bStageIdx
               
               // For module_generator, sort by module_index
@@ -437,7 +502,7 @@ export function AgentDashboard() {
                   <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(task.status)}`}>
                     {task.status}
                   </span>
-                  <span className="text-sm text-gray-500 capitalize">{task.stage}</span>
+                  <span className="text-sm text-gray-500">{stageDisplayLabel(task.stage)}</span>
                   {task.agent_name === 'module_generator' && (
                     <span className="text-xs px-2 py-1 bg-blue-200 text-blue-800 rounded">
                       {task.status === 'running' && task.metadata?.current_module ? (
