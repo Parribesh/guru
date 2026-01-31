@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 engine = create_engine(os.getenv("DATABASE_URL"))
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

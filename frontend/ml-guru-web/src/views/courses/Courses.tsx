@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
+import { SyllabusBuilderCard } from '../../components/SyllabusBuilderCard'
 import { axiosInstance } from '../../config/axiosConfig'
-import { API_URL } from '../../config/config'
+import { API_URL, WS_URL } from '../../config/config'
+import type { SyllabusBuilderPayload } from '../../types/syllabusBuilder'
 
 type Course = {
   id: string
@@ -43,15 +45,20 @@ export const Courses = () => {
   const [draft, setDraft] = useState<SyllabusDraftResponse | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Syllabus builder (streamed)
+  // Syllabus builder: step-by-step (Continue button); one card updated in place
   const [syllabusRunId, setSyllabusRunId] = useState<string | null>(null)
   const [syllabusPhase, setSyllabusPhase] = useState<string | null>(null)
   const [syllabusStatus, setSyllabusStatus] = useState<'idle' | 'running' | 'completed' | 'failed'>('idle')
-  const [genLog, setGenLog] = useState('')
-  const [criticLog, setCriticLog] = useState('')
-  const [criticVerdict, setCriticVerdict] = useState<{ approved?: boolean; issues?: string[] } | null>(null)
+  const [syllabusCurrentStep, setSyllabusCurrentStep] = useState<{
+    stage: string
+    data: Record<string, unknown>
+    agent?: string
+    inference_model?: string
+  } | null>(null)
+  const [syllabusStepVersion, setSyllabusStepVersion] = useState(0)
   const [syllabusModules, setSyllabusModules] = useState<DraftModule[]>([])
-  const syllabusEsRef = useRef<EventSource | null>(null)
+  const [syllabusStepBusy, setSyllabusStepBusy] = useState(false)
+  const syllabusWsRef = useRef<WebSocket | null>(null)
 
   // Test UI
   const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null)
@@ -92,14 +99,93 @@ export const Courses = () => {
     if (params.courseId !== selectedCourseId) {
       navigate(`/courses/${selectedCourseId}`, { replace: false })
     }
+    const storedRunId = (() => {
+      try {
+        return sessionStorage.getItem(`syllabusRun-${selectedCourseId}`)
+      } catch {
+        return null
+      }
+    })()
+    if (storedRunId) {
+      axiosInstance
+        .get(`/guru/syllabus/runs/${storedRunId}`)
+        .then((r) => {
+          const d = r.data as { status: string; state_snapshot?: Record<string, unknown> | null }
+          if (d.status === 'running') {
+            setSyllabusRunId(storedRunId)
+            setSyllabusStatus('running')
+            if (d.state_snapshot) {
+              const snap = d.state_snapshot && typeof d.state_snapshot === 'object' ? { ...d.state_snapshot } : {}
+              const stage = (snap.next_node as string) || (snap.phase as string) || 'running'
+              setSyllabusPhase(stage)
+              setSyllabusCurrentStep({ stage, data: snap })
+              setSyllabusStepVersion((v) => v + 1)
+            }
+          } else {
+            try {
+              sessionStorage.removeItem(`syllabusRun-${selectedCourseId}`)
+            } catch (_) {}
+          }
+        })
+        .catch(() => {
+          try {
+            sessionStorage.removeItem(`syllabusRun-${selectedCourseId}`)
+          } catch (_) {}
+        })
+    }
   }, [selectedCourseId, navigate, params.courseId])
+
+  // WebSocket: subscribe to syllabus run so every run is visible (e.g. other tab clicks Continue)
+  useEffect(() => {
+    if (!syllabusRunId || syllabusStatus !== 'running') {
+      syllabusWsRef.current?.close()
+      syllabusWsRef.current = null
+      return
+    }
+    const ws = new WebSocket(`${WS_URL}/guru/ws/syllabus/runs/${syllabusRunId}`)
+    syllabusWsRef.current = ws
+    ws.onmessage = (ev) => {
+      try {
+        const body = JSON.parse(ev.data as string) as SyllabusBuilderPayload
+        const state = body.state ?? {}
+        setSyllabusPhase(body.stage)
+        setSyllabusCurrentStep({
+          stage: body.stage,
+          data: state,
+          agent: body.agent,
+          inference_model: body.inference_model,
+        })
+        if (body.done) {
+          setSyllabusStatus('completed')
+          if (Array.isArray(state.modules)) setSyllabusModules(state.modules as DraftModule[])
+          if (selectedCourseId) {
+            try {
+              sessionStorage.removeItem(`syllabusRun-${selectedCourseId}`)
+            } catch (_) {}
+            loadCourseDetail(selectedCourseId)
+            loadCourses()
+          }
+        }
+      } catch (e) {
+        console.error('syllabus WS message parse error', e)
+      }
+    }
+    ws.onclose = () => {
+      if (syllabusWsRef.current === ws) syllabusWsRef.current = null
+    }
+    ws.onerror = () => {
+      ws.close()
+    }
+    return () => {
+      ws.close()
+      if (syllabusWsRef.current === ws) syllabusWsRef.current = null
+    }
+  }, [syllabusRunId, syllabusStatus, selectedCourseId])
 
   useEffect(() => {
     return () => {
       esRef.current?.close()
       esRef.current = null
-      syllabusEsRef.current?.close()
-      syllabusEsRef.current = null
     }
   }, [])
 
@@ -138,109 +224,61 @@ export const Courses = () => {
   const startSyllabusRunFor = async (courseId: string) => {
     setBusy(true)
     try {
-      // Reset UI
+      const runToDelete = syllabusRunId
       setSyllabusRunId(null)
       setSyllabusPhase(null)
       setSyllabusStatus('running')
-      setGenLog('')
-      setCriticLog('')
-      setCriticVerdict(null)
-      // Start run
+      setSyllabusCurrentStep(null)
+      if (runToDelete) {
+        await axiosInstance.delete(`/guru/syllabus/runs/${runToDelete}`).catch(() => {})
+      }
       const r = await axiosInstance.post(`/guru/courses/${courseId}/syllabus/run`)
       const runId = (r.data as { run_id: string }).run_id
       setSyllabusRunId(runId)
-
-      // Stream run
-      syllabusEsRef.current?.close()
-      const url = `${API_URL}/guru/syllabus/runs/${runId}/stream`
-      const es = new EventSource(url, { withCredentials: true })
-      syllabusEsRef.current = es
-
-      type SsePayload = { phase?: string; type?: string; data?: unknown }
-      type TokenData = { t?: string }
-      type ModulesData = { modules?: DraftModule[] }
-      type CriticData = { approved?: boolean; issues?: string[]; revised_modules?: DraftModule[] }
-
-      // Listen for metadata_update events (standardized session event)
-      es.addEventListener('metadata_update', (event: MessageEvent) => {
-        try {
-          const payload = JSON.parse(event.data as string) as SsePayload
-          // Update phase whenever it's provided
-          if (payload.phase) {
-            setSyllabusPhase(payload.phase)
-          }
-          
-          // Handle phase_start (state-derived: data = graph state with current_stage)
-          if (payload.type === 'phase_start') {
-            const stage = payload.phase ?? (payload.data as { current_stage?: string })?.current_stage
-            if (stage) setSyllabusPhase(stage)
-            console.log(`Phase started: ${stage}`)
-          }
-          
-          // Handle token events
-          if (payload.type === 'token') {
-            const d = (payload.data as TokenData) || {}
-            const t = d.t ?? ''
-            if (payload.phase === 'generate') setGenLog((p) => p + t)
-            if (payload.phase === 'critic') setCriticLog((p) => p + t)
-          }
-          
-          // Handle result events (legacy: generate/revise/critic)
-          if (payload.type === 'result') {
-            const d = payload.data as ModulesData & CriticData
-            if (d?.modules && Array.isArray(d.modules)) setSyllabusModules(d.modules)
-            if (payload.phase === 'critic' && d) {
-              setCriticVerdict({
-                approved: Boolean(d.approved),
-                issues: Array.isArray(d.issues) ? d.issues : [],
-              })
-            }
-          }
-
-          // Handle done (SyllabusAgent stream: type=done, data.modules)
-          if (payload.type === 'done') {
-            const d = payload.data as ModulesData
-            if (d?.modules && Array.isArray(d.modules)) setSyllabusModules(d.modules)
-            setSyllabusStatus('completed')
-            es.close()
-            if (syllabusEsRef.current === es) syllabusEsRef.current = null
-            loadCourseDetail(courseId)
-            loadCourses()
-          }
-        } catch (e) {
-          console.error('failed to parse syllabus stream event', e, event)
-        }
-      })
-
-      es.addEventListener('error', (ev) => {
-        console.error('syllabus error event', ev)
-        setSyllabusStatus('failed')
-      })
-
-      es.addEventListener('session_ended', () => {
-        es.close()
-        if (syllabusEsRef.current === es) syllabusEsRef.current = null
-        if (syllabusStatus === 'running') setSyllabusStatus('completed')
-        loadCourseDetail(courseId)
-        loadCourses()
-      })
-
-      es.addEventListener('run_ended', () => {
-        es.close()
-        if (syllabusEsRef.current === es) syllabusEsRef.current = null
-        if (syllabusStatus === 'running') setSyllabusStatus('completed')
-        loadCourseDetail(courseId)
-        loadCourses()
-      })
-
-      es.onerror = (ev) => {
-        console.error('syllabus stream error', ev)
-        setSyllabusStatus('failed')
-        es.close()
-        if (syllabusEsRef.current === es) syllabusEsRef.current = null
-      }
+      try {
+        sessionStorage.setItem(`syllabusRun-${courseId}`, runId)
+      } catch (_) {}
     } finally {
       setBusy(false)
+    }
+  }
+
+  const continueSyllabusStep = async () => {
+    if (!syllabusRunId || syllabusStatus === 'completed' || syllabusStatus === 'failed') return
+    setSyllabusStepBusy(true)
+    try {
+      const r = await axiosInstance.post(`/guru/syllabus/runs/${syllabusRunId}/step`)
+      const body = r.data as SyllabusBuilderPayload
+      const state = body.state && typeof body.state === 'object' ? { ...body.state } : {}
+      setSyllabusPhase(body.stage)
+      setSyllabusCurrentStep({
+        stage: body.stage,
+        data: state,
+        agent: body.agent ?? undefined,
+        inference_model: body.inference_model ?? undefined,
+      })
+      setSyllabusStepVersion((v) => v + 1)
+      if (body.done) {
+        setSyllabusStatus('completed')
+        if (Array.isArray(state.modules)) setSyllabusModules(state.modules as DraftModule[])
+        if (selectedCourseId) {
+          try {
+            sessionStorage.removeItem(`syllabusRun-${selectedCourseId}`)
+          } catch (_) {}
+          loadCourseDetail(selectedCourseId)
+          loadCourses()
+        }
+      }
+    } catch (e) {
+      console.error('syllabus step error', e)
+      setSyllabusStatus('failed')
+      if (selectedCourseId) {
+        try {
+          sessionStorage.removeItem(`syllabusRun-${selectedCourseId}`)
+        } catch (_) {}
+      }
+    } finally {
+      setSyllabusStepBusy(false)
     }
   }
 
@@ -335,17 +373,10 @@ export const Courses = () => {
   const syllabusProgressPct = useMemo(() => {
     if (syllabusStatus === 'idle') return 0
     if (syllabusStatus === 'failed') return 100
-    if (syllabusPhase === 'finalize' || syllabusStatus === 'completed') return 100
-    // Agentic pipeline phases: planning → generation → validation → finalization
-    if (syllabusPhase === 'planning') return 20
-    if (syllabusPhase === 'generation') return 50
-    if (syllabusPhase === 'validation' || syllabusPhase === 'finalization') return 75
-    // Legacy phases (if any)
-    if (syllabusPhase === 'generate') return 25
-    if (syllabusPhase === 'critic') return 65
-    if (syllabusPhase === 'revise') return 85
+    if (syllabusStatus === 'completed') return 100
+    if (syllabusCurrentStep) return 50
     return 10
-  }, [syllabusPhase, syllabusStatus])
+  }, [syllabusPhase, syllabusStatus, syllabusCurrentStep])
 
   return (
     <div className="flex h-[calc(100vh-120px)] gap-4">
@@ -424,7 +455,7 @@ export const Courses = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold">Syllabus Builder</div>
-                    <div className="text-xs text-gray-500">Generate → Critic → Revise → Finalize (streamed)</div>
+                    <div className="text-xs text-gray-500">generate_concepts → validate → add_concepts (retry) → add_module per level</div>
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -452,26 +483,55 @@ export const Courses = () => {
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-                    <div className="text-xs font-semibold uppercase text-gray-500">Generate (live)</div>
-                    <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap text-xs">{genLog || '(waiting…)'} </pre>
+                <div className="mt-3">
+                  {syllabusStatus === 'running' && (
+                    <div className="mb-2 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs font-medium text-blue-800">
+                      <span className="font-semibold">Syllabus run in progress</span>
+                      {syllabusRunId && <span className="text-blue-600">Run ID: {syllabusRunId.slice(0, 8)}…</span>}
+                      {syllabusPhase && <span>Stage: {syllabusPhase}</span>}
+                    </div>
+                  )}
+                  <div className="text-xs font-semibold uppercase text-gray-500 mb-2">Current step (updates when you click Continue)</div>
+                  <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
+                    {!syllabusCurrentStep && syllabusStatus === 'running' && (
+                      <div className="text-xs text-gray-500 mb-2">Click Continue to run the next node.</div>
+                    )}
+                    {syllabusCurrentStep && (
+                      <SyllabusBuilderCard
+                        key={`${syllabusRunId ?? ''}-${syllabusCurrentStep.stage}-${syllabusStepVersion}`}
+                        index={1}
+                        payload={{
+                          stage: syllabusCurrentStep.stage,
+                          state: syllabusCurrentStep.data as SyllabusBuilderPayload['state'],
+                          done: syllabusStatus === 'completed',
+                          agent: syllabusCurrentStep.agent ?? undefined,
+                          inference_model: syllabusCurrentStep.inference_model ?? undefined,
+                        }}
+                      />
+                    )}
                   </div>
-                  <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-                    <div className="text-xs font-semibold uppercase text-gray-500">Critic (live)</div>
-                    <pre className="mt-2 max-h-[180px] overflow-auto whitespace-pre-wrap text-xs">{criticLog || '(waiting…)'} </pre>
-                    {criticVerdict ? (
-                      <div className="mt-2 text-xs">
-                        <div className="font-semibold">Verdict: {criticVerdict.approved ? 'approved' : 'needs revision'}</div>
-                        {criticVerdict.issues?.length ? (
-                          <ul className="mt-1 list-disc pl-5 text-gray-700">
-                            {criticVerdict.issues.slice(0, 5).map((x, i) => (
-                              <li key={i}>{x}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </div>
-                    ) : null}
+                  <div className="mt-2 flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={!syllabusRunId || syllabusStatus !== 'running' || syllabusStepBusy}
+                      onClick={continueSyllabusStep}
+                      className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                      {syllabusStepBusy ? 'Running…' : 'Continue'}
+                    </button>
+                    {selectedCourseId && (syllabusRunId || syllabusStatus === 'running' || syllabusStatus === 'completed') && (
+                      <button
+                        type="button"
+                        disabled={busy || syllabusStepBusy}
+                        onClick={() => startSyllabusRunFor(selectedCourseId)}
+                        className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        Rerun from scratch
+                      </button>
+                    )}
+                    {syllabusStatus === 'completed' && (
+                      <span className="text-sm text-green-600 font-medium">Syllabus complete</span>
+                    )}
                   </div>
                 </div>
 

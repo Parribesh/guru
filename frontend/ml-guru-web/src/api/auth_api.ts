@@ -1,6 +1,14 @@
 import { axiosInstance } from '../config/axiosConfig'
 import { loginRequestSchema, registerRequestSchema, type LoginRequest, type LoginResponse, type RegisterRequest, type RegisterResponse } from '../schemas/authSchemas'
 
+export type UserInfo = { email: string; preferences?: Record<string, unknown> }
+
+export const getMe = async (): Promise<UserInfo> => {
+  const response = await axiosInstance.get('/auth/me')
+  const data = response.data as { email: string; preferences?: Record<string, unknown> }
+  return { email: data.email, preferences: data.preferences }
+}
+
 export const login = async (loginRequest: LoginRequest): Promise<LoginResponse> => {
     const validatedRequest = loginRequestSchema.parse(loginRequest)
     const response = await axiosInstance.post('/auth/login', validatedRequest)
@@ -14,5 +22,10 @@ export const register = async (registerRequest: RegisterRequest): Promise<Regist
 }
 
 export const logout = async (): Promise<void> => {
-    await axiosInstance.post('/auth/logout')
+  await axiosInstance.post('/auth/logout')
+}
+
+export const updateUserPreferences = async (preferences: Record<string, unknown>): Promise<{ preferences: Record<string, unknown> }> => {
+  const response = await axiosInstance.patch('/guru/user/preferences', { preferences })
+  return response.data as { preferences: Record<string, unknown> }
 }

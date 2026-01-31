@@ -1,12 +1,31 @@
 from datetime import datetime
 from typing import Optional
-from fastapi import HTTPException,  Cookie, Response, status, Depends
+from fastapi import HTTPException, Cookie, Response, status, Depends
+from fastapi import WebSocket
 from api.schemas.auth_schemas import AuthTokenPayload
 from api.utils.jwt import verify_token, get_password_hash, create_access_token, verify_password
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from api.models.models import User
 from api.config import get_db
+
+
+def _token_from_ws_scope(scope: dict) -> Optional[str]:
+    """Extract access_token from Cookie or query (?token=) in WebSocket scope. Returns None if missing."""
+    qs = scope.get("query_string") or b""
+    if qs:
+        for part in qs.split(b"&"):
+            if part.startswith(b"token="):
+                return part[6:].decode("utf-8", errors="replace").strip()
+    for name, value in scope.get("headers") or []:
+        if name.lower() == b"cookie":
+            cookie = value.decode("utf-8", errors="replace")
+            for part in cookie.split(";"):
+                part = part.strip()
+                if part.startswith("access_token="):
+                    return part[13:].strip()
+            break
+    return None
 
 
 
@@ -51,6 +70,20 @@ def clear_auth_cookie(response: Response) -> None:
         secure=False,
         samesite="lax"
     )
+
+def get_user_from_websocket(websocket: WebSocket, db: Session) -> tuple[User, int] | None:
+    """Get (User, user_id) from WebSocket (cookie or query token). Returns None if unauthenticated."""
+    token = _token_from_ws_scope(websocket.scope)
+    if not token:
+        return None
+    payload = verify_token(token)
+    if payload is None or payload.sub is None:
+        return None
+    user = get_user_by_email(payload.sub, db)
+    if user is None:
+        return None
+    return (user, int(user.id))
+
 
 def get_user_by_email(email: str, db: Session) -> User | None:
     try: 

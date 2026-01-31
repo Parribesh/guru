@@ -1,25 +1,28 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router-dom'
 import './App.css'
+import { Layout } from './components/Layout'
 import { GuruChat } from './views/guru/GuruChat'
-import { AuthForm } from './views/auth/AuthForm'
-import { axiosInstance } from './config/axiosConfig'
+import { LoginPage } from './views/auth/LoginPage'
+import { getMe } from './api/auth_api'
 import { Courses } from './views/courses/Courses'
 import LearningSessionChat from './views/learn/LearningSessionChat'
 import { AgentDashboard } from './views/dashboard/AgentDashboard'
+import { ProfilePage } from './views/profile/ProfilePage'
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [userEmail, setUserEmail] = useState<string | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
-  const location = useLocation()
-  const navigate = useNavigate()
 
   const refreshAuth = useCallback(async () => {
     try {
-      await axiosInstance.get('/auth/me')
+      const user = await getMe()
       setIsLoggedIn(true)
+      setUserEmail(user.email)
     } catch {
       setIsLoggedIn(false)
+      setUserEmail(null)
     } finally {
       setAuthChecked(true)
     }
@@ -29,91 +32,83 @@ function App() {
     refreshAuth()
   }, [refreshAuth])
 
-  // Small guard so we don't flicker routes before auth check finishes.
   if (!authChecked) {
     return (
-      <div className="app">
-        <h1 className="mb-4 text-left text-2xl font-bold">ML Guru</h1>
-        <div className="text-sm text-gray-500">Loading…</div>
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <p className="text-slate-600">Loading…</p>
+        </div>
       </div>
     )
   }
 
   const Protected = ({ children }: { children: React.ReactNode }) => {
-    if (!isLoggedIn) return <Navigate to="/login" replace state={{ from: location.pathname }} />
+    if (!isLoggedIn) return <Navigate to="/login" replace />
     return <>{children}</>
   }
 
-  const onAuthSuccess = async () => {
-    await refreshAuth()
-    navigate('/courses', { replace: true })
-  }
-
   return (
-    <div className="app">
-      <h1 className="mb-4 text-left text-2xl font-bold">ML Guru</h1>
-      <div className="mb-4 flex gap-2">
-        <Link
-          to="/chat"
-          className="rounded-md bg-gray-100 px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-200"
-        >
-          Chat
-        </Link>
-        <Link
-          to="/courses"
-          className="rounded-md bg-gray-100 px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-200"
-        >
-          Courses
-        </Link>
-        {isLoggedIn && (
-          <Link
-            to="/dashboard"
-            className="rounded-md bg-blue-100 px-3 py-2 text-sm font-semibold text-blue-900 hover:bg-blue-200"
-          >
-            Agent Dashboard
-          </Link>
-        )}
-      </div>
+    <Routes>
+      <Route
+        path="/"
+        element={
+          <Layout
+            isLoggedIn={isLoggedIn}
+            userEmail={userEmail}
+            onLogout={() => {
+              setIsLoggedIn(false)
+              setUserEmail(null)
+            }}
+          />
+        }
+      >
+        <Route index element={<Navigate to={isLoggedIn ? '/courses' : '/login'} replace />} />
 
-      <Routes>
         <Route
-          path="/"
-          element={<Navigate to={isLoggedIn ? '/courses' : '/login'} replace />}
+          path="login"
+          element={
+            isLoggedIn ? (
+              <Navigate to="/courses" replace />
+            ) : (
+              <LoginPage onAuthSuccess={refreshAuth} />
+            )
+          }
         />
 
         <Route
-          path="/login"
-          element={isLoggedIn ? <Navigate to="/courses" replace /> : <AuthForm onAuthSuccess={onAuthSuccess} />}
-        />
-
-        <Route
-          path="/chat"
+          path="courses"
           element={
             <Protected>
-              <GuruChat />
+              <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+                <Courses />
+              </div>
+            </Protected>
+          }
+        />
+        <Route
+          path="courses/:courseId"
+          element={
+            <Protected>
+              <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+                <Courses />
+              </div>
             </Protected>
           }
         />
 
         <Route
-          path="/courses"
+          path="chat"
           element={
             <Protected>
-              <Courses />
-            </Protected>
-          }
-        />
-        <Route
-          path="/courses/:courseId"
-          element={
-            <Protected>
-              <Courses />
+              <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+                <GuruChat />
+              </div>
             </Protected>
           }
         />
 
         <Route
-          path="/learn/:conversationId"
+          path="learn/:conversationId"
           element={
             <Protected>
               <LearningSessionChat />
@@ -122,7 +117,23 @@ function App() {
         />
 
         <Route
-          path="/dashboard"
+          path="dashboard"
+          element={
+            <Protected>
+              <AgentDashboard />
+            </Protected>
+          }
+        />
+        <Route
+          path="dashboard/syllabus-run/:runId"
+          element={
+            <Protected>
+              <AgentDashboard />
+            </Protected>
+          }
+        />
+        <Route
+          path="dashboard/:sessionId"
           element={
             <Protected>
               <AgentDashboard />
@@ -131,25 +142,17 @@ function App() {
         />
 
         <Route
-          path="/dashboard/syllabus-run/:runId"
+          path="profile"
           element={
             <Protected>
-              <AgentDashboard />
-            </Protected>
-          }
-        />
-        <Route
-          path="/dashboard/:sessionId"
-          element={
-            <Protected>
-              <AgentDashboard />
+              <ProfilePage />
             </Protected>
           }
         />
 
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </div>
+      </Route>
+    </Routes>
   )
 }
 

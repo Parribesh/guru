@@ -130,3 +130,79 @@ class CourseModulesResponse(BaseModel):
 class StartSyllabusRunResponse(BaseModel):
     run_id: str
 
+
+class SyllabusBuilderState(BaseModel):
+    """
+    Full syllabus builder state (graph state). Sent in WebSocket and step response.
+    All keys optional; presence indicates current agent state for frontend display.
+    """
+    # Course context
+    course_title: Optional[str] = None
+    subject: Optional[str] = None
+    goals: Optional[str] = None
+    target_level: Optional[str] = None
+    # Pipeline
+    next_node: Optional[str] = None  # next node to run: generate_concepts, validate, add_concepts, add_module
+    current_level: Optional[str] = None  # beginner | intermediate | advanced
+    current_concepts: Optional[list] = None
+    meets_threshold: Optional[bool] = None
+    needed_count: Optional[int] = None
+    add_concepts_rounds: Optional[int] = None
+    # Syllabus result (accumulated)
+    modules: Optional[list] = None  # [{ title, objectives, estimated_minutes, dependencies }]
+    concepts_by_level: Optional[dict] = None  # { level: [concepts] }
+    # Step visibility (last node run)
+    step_prompt: Optional[str] = None  # user prompt sent to LLM (or validator description)
+    step_output: Optional[str] = None  # JSON or description of node output
+    # Base agent system prompt (scenario); single system prompt for the run
+    system_prompt: Optional[str] = None
+    # Agent info (which agent and model used for inference)
+    agent: Optional[str] = None
+    inference_model: Optional[str] = None
+    # Misc
+    current_stage: Optional[str] = None
+    error: Optional[str] = None
+
+    class Config:
+        extra = "allow"  # allow additional keys from graph
+
+
+class SyllabusBuilderPayload(BaseModel):
+    """
+    Payload sent over WebSocket and returned from POST .../step.
+    Single place for frontend to read current agent state and metadata.
+    """
+    stage: str  # last node run: generate_concepts, validate, add_concepts, add_module
+    state: dict  # SyllabusBuilderState shape (full graph state)
+    done: bool  # True when syllabus generation is complete
+    agent: Optional[str] = None  # agent name used for inference (e.g. SyllabusAgent)
+    inference_model: Optional[str] = None  # Ollama model used (e.g. qwen:latest)
+
+
+class SyllabusStepResponse(SyllabusBuilderPayload):
+    """Response from POST /syllabus/runs/{run_id}/step. Same shape as WebSocket payload."""
+    pass
+
+
+class SyllabusRunResponse(BaseModel):
+    """Response from GET /syllabus/runs/{run_id} (run status and state)."""
+    run_id: str
+    course_id: str  # for rerun from same course
+    status: str  # running | completed | failed
+    state_snapshot: dict | None  # current graph state (for step-by-step UI)
+    result: dict | None  # final modules/concepts when status=completed
+    agent: Optional[str] = None  # agent used for inference
+    inference_model: Optional[str] = None  # Ollama model used for inference
+
+
+class SyllabusRunListItem(BaseModel):
+    run_id: str
+    course_id: str
+    status: str
+    phase: str | None
+
+
+class ListSyllabusRunsResponse(BaseModel):
+    """Response from GET /syllabus/runs?status=running (list for dashboard)."""
+    runs: list[SyllabusRunListItem]
+

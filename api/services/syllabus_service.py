@@ -19,8 +19,10 @@ from uuid import uuid4
 from sqlalchemy.orm import Session as DBSession
 
 from api.bootstrap import build_registry
-from api.models.models import Course, SyllabusEvent, SyllabusRun
+from api.models.models import Course, SyllabusEvent, SyllabusRun, User as DbUser
 from api.utils.logger import configure_logging
+from infra.llm.ollama import OllamaLLM
+from agents.syllabus_agent.agent import SyllabusAgent
 
 logger = configure_logging()
 
@@ -43,6 +45,34 @@ class SyllabusService:
             .filter(SyllabusRun.id == run_id, SyllabusRun.user_id == user_id)
             .first()
         )
+
+    def list_runs(
+        self, user_id: int, status: str | None = None, limit: int = 20
+    ) -> list[dict]:
+        """List syllabus runs for the user, optionally filtered by status. Most recent first."""
+        q = self.db.query(SyllabusRun).filter(SyllabusRun.user_id == user_id)
+        if status:
+            q = q.filter(SyllabusRun.status == status)
+        runs = q.order_by(SyllabusRun.updated_at.desc()).limit(limit).all()
+        return [
+            {
+                "run_id": r.id,
+                "course_id": r.course_id,
+                "status": r.status,
+                "phase": r.phase,
+            }
+            for r in runs
+        ]
+
+    def delete_run(self, run_id: str, user_id: int) -> bool:
+        """Delete a syllabus run and its events. Returns True if deleted, False if not found."""
+        run = self.get_run(run_id, user_id)
+        if not run:
+            return False
+        self.db.query(SyllabusEvent).filter(SyllabusEvent.run_id == run_id).delete()
+        self.db.delete(run)
+        self.db.commit()
+        return True
 
     def start_run(self, course_id: str, user_id: int) -> str:
         """
@@ -67,6 +97,67 @@ class SyllabusService:
         self.db.add(run)
         self.db.commit()
         return run_id
+
+    async def step_run(self, run_id: str, user_id: int) -> dict | None:
+        """
+        Run one graph node for the run; persist state; return { stage, state, done }.
+        If run is completed/failed, return None. State is loaded from run.state_snapshot
+        or built from course (initial step).
+        """
+        run = self.get_run(run_id, user_id)
+        if not run or run.status in ("completed", "failed"):
+            return None
+        course = (
+            self.db.query(Course)
+            .filter(Course.id == run.course_id, Course.user_id == user_id)
+            .first()
+        )
+        if not course:
+            return None
+        user = self.db.query(DbUser).filter(DbUser.id == user_id).first()
+        prefs = user.preferences if user and isinstance(user.preferences, dict) else {}
+        model = prefs.get("ollama_model") or "qwen:latest"
+        llm = OllamaLLM(model=model)
+        agent = SyllabusAgent(name="SyllabusAgent", llm=llm)
+        plan = {
+            "course_title": course.title,
+            "subject": course.subject,
+            "goals": course.goals,
+        }
+        state = run.state_snapshot if isinstance(run.state_snapshot, dict) else None
+        if state is None:
+            state = agent.get_initial_step_state(plan)
+        stage = state.get("next_node") or "planning"
+        new_state, done = await agent.run_one_step(state, inference_model=model)
+        run.state_snapshot = new_state
+        run.phase = stage
+        run.updated_at = datetime.utcnow()
+        ev = SyllabusEvent(
+            id=str(uuid4()),
+            run_id=run_id,
+            phase=stage,
+            type="node_result",
+            data=new_state,
+        )
+        self.db.add(ev)
+        if done:
+            run.status = "completed"
+            run.phase = "finalize"
+            run.result = {
+                "modules": new_state.get("modules") or [],
+                "concepts_by_level": new_state.get("concepts_by_level") or {},
+            }
+            course.syllabus_draft = run.result
+            self.db.add(course)
+        self.db.add(run)
+        self.db.commit()
+        return {
+            "stage": stage,
+            "state": new_state,
+            "done": done,
+            "agent": new_state.get("agent") or agent.name,
+            "inference_model": new_state.get("inference_model") or model,
+        }
 
     async def stream_run(self, run_id: str, user_id: int) -> AsyncIterator[str]:
         """
@@ -152,7 +243,10 @@ class SyllabusService:
                         events_queue.append((event_type, stage, state))
                         if event_type == "done":
                             modules = state.get("modules") or []
-                            syllabus_result_holder.append(SimpleNamespace(modules=modules))
+                            concepts_by_level = state.get("concepts_by_level") or {}
+                            syllabus_result_holder.append(
+                                SimpleNamespace(modules=modules, concepts_by_level=concepts_by_level)
+                            )
                             for idx, mod in enumerate(modules, 1):
                                 events_queue.append(
                                     (
@@ -205,8 +299,9 @@ class SyllabusService:
                     agent_error.append(str(e))
                 raise
 
-            modules = syllabus_result_holder[0].modules if syllabus_result_holder else []
-            # Clean state: allow empty modules (stub completes with no syllabus; new design will be per-module)
+            result_ns = syllabus_result_holder[0] if syllabus_result_holder else None
+            modules = result_ns.modules if result_ns else []
+            concepts_by_level = getattr(result_ns, "concepts_by_level", None) if result_ns else None
             if not modules and agent_error:
                 msg = agent_error[0]
                 raise ValueError(msg)
@@ -214,9 +309,9 @@ class SyllabusService:
             run.phase = "finalize"
             run.status = "completed"
             run.updated_at = datetime.utcnow()
-            run.result = {"modules": modules}
+            run.result = {"modules": modules, "concepts_by_level": concepts_by_level or {}}
             self.db.add(run)
-            course.syllabus_draft = {"modules": modules}
+            course.syllabus_draft = {"modules": modules, "concepts_by_level": concepts_by_level or {}}
             self.db.add(course)
             self.db.commit()
 

@@ -5,8 +5,9 @@ Ollama LLM wrapper. One ChatOllama backend for generate, stream, and structured 
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterator, Type, TypeVar
+from typing import AsyncIterator, Optional, Type, TypeVar
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 
@@ -43,15 +44,23 @@ class OllamaLLM(LLM):
         schema: Type[T],
         *,
         timeout: float = DEFAULT_STRUCTURED_TIMEOUT,
+        system_prompt: Optional[str] = None,
         **kwargs,
     ) -> T:
         """
         Invoke the LLM and return parsed structured output (Pydantic).
-
-        Uses LangChain's ChatOllama.with_structured_output() for parsing and validation.
+        If system_prompt is provided, it is sent as a system message before the user prompt.
         """
         structured = self._llm.with_structured_output(schema, **kwargs)
+        if system_prompt:
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=prompt),
+            ]
+            input_arg = messages
+        else:
+            input_arg = prompt
         return await asyncio.wait_for(
-            structured.ainvoke(prompt),
+            structured.ainvoke(input_arg),
             timeout=timeout,
         )

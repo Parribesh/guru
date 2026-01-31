@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useParams, useNavigate, Link } from 'react-router-dom'
+import { SyllabusBuilderCard } from '../../components/SyllabusBuilderCard'
 import { axiosInstance } from '../../config/axiosConfig'
+import { WS_URL } from '../../config/config'
+import type { SyllabusBuilderPayload } from '../../types/syllabusBuilder'
 
 interface AgentTask {
   agent_name: string
@@ -40,27 +43,16 @@ interface PipelineStatus {
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-// Syllabus stages: 3 concept steps then 3 module steps (shown in UI)
+// Syllabus: one step per graph node (generate_concepts, validate, add_concepts, add_module)
 const STAGE_LABELS: Record<string, string> = {
   planning: 'Planning',
-  concepts_beginner: 'Beginner concepts',
-  concepts_intermediate: 'Intermediate concepts',
-  concepts_advanced: 'Advanced concepts',
-  module_beginner: 'Beginner module',
-  module_intermediate: 'Intermediate module',
-  module_advanced: 'Advanced module',
+  generate_concepts: 'Generate concepts',
+  validate: 'Validate',
+  add_concepts: 'Add concepts',
+  add_module: 'Add module',
   finalize: 'Finalize',
 }
-const STAGE_ORDER = [
-  'planning',
-  'concepts_beginner',
-  'concepts_intermediate',
-  'concepts_advanced',
-  'module_beginner',
-  'module_intermediate',
-  'module_advanced',
-  'finalize',
-]
+const STAGE_ORDER = ['planning', 'generate_concepts', 'validate', 'add_concepts', 'add_module', 'finalize']
 
 function stageDisplayLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage.replace(/_/g, ' ')
@@ -68,14 +60,179 @@ function stageDisplayLabel(stage: string): string {
 
 export function AgentDashboard() {
   const { sessionId, runId } = useParams<{ sessionId?: string; runId?: string }>()
+  const navigate = useNavigate()
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeSessions, setActiveSessions] = useState<Array<{ id: string; course_id: string; phase: string }>>([])
+  // Active syllabus run on main /dashboard (from list) – subscribe and show updates
+  const [activeSyllabusRun, setActiveSyllabusRun] = useState<{ run_id: string; course_id: string } | null>(null)
+  const [activeSyllabusRunsLoading, setActiveSyllabusRunsLoading] = useState(true)
 
-  // Syllabus runs use /guru/syllabus/runs/:runId/stream; sessions use /guru/sessions/:sessionId/stream
+  // Syllabus runs: step-by-step (no stream); sessions: stream
   const streamId = runId ?? sessionId
   const isSyllabusRun = Boolean(runId)
+  // When on /dashboard use active run from list; when on /dashboard/syllabus-run/:runId use runId
+  const effectiveSyllabusRunId = isSyllabusRun ? runId! : activeSyllabusRun?.run_id ?? null
+
+  // Syllabus step-by-step: single card + Continue button; display driven by WebSocket when runId matches
+  const [syllabusRunStatus, setSyllabusRunStatus] = useState<'loading' | 'running' | 'completed' | 'failed'>('loading')
+  const [syllabusStep, setSyllabusStep] = useState<{
+    stage: string
+    data: Record<string, unknown>
+    agent?: string
+    inference_model?: string
+  } | null>(null)
+  const [syllabusStepVersion, setSyllabusStepVersion] = useState(0)
+  const [syllabusStepBusy, setSyllabusStepBusy] = useState(false)
+  const [syllabusWsConnected, setSyllabusWsConnected] = useState(false)
+  const [syllabusRunCourseId, setSyllabusRunCourseId] = useState<string | null>(null)
+  const syllabusWsRef = useRef<WebSocket | null>(null)
+
+  // Fetch active syllabus runs when on main /dashboard – pick first running to subscribe
+  useEffect(() => {
+    if (streamId) {
+      setActiveSyllabusRunsLoading(false)
+      return
+    }
+    setActiveSyllabusRunsLoading(true)
+    axiosInstance.get('/guru/syllabus/runs?status=running')
+      .then((r) => {
+        const data = r.data as { runs: Array<{ run_id: string; course_id: string; status: string; phase: string | null }> }
+        const runs = data.runs ?? []
+        const first = runs[0]
+        setActiveSyllabusRun(first ? { run_id: first.run_id, course_id: first.course_id } : null)
+      })
+      .catch((err) => {
+        console.error('Failed to load active syllabus runs', err)
+      })
+      .finally(() => setActiveSyllabusRunsLoading(false))
+  }, [streamId])
+
+  // Fetch syllabus run on mount (fallback for initial state before WebSocket sends)
+  useEffect(() => {
+    if (!effectiveSyllabusRunId) return
+    setSyllabusRunStatus('loading')
+    setSyllabusStep(null)
+    axiosInstance.get(`/guru/syllabus/runs/${effectiveSyllabusRunId}`)
+      .then((r) => {
+        const d = r.data as { run_id: string; course_id?: string; status: string; state_snapshot?: Record<string, unknown> | null; result?: Record<string, unknown> | null }
+        if (d.course_id) setSyllabusRunCourseId(d.course_id)
+        setSyllabusRunStatus(d.status as 'running' | 'completed' | 'failed')
+        if (d.status === 'running' && d.state_snapshot) {
+          const snap = d.state_snapshot && typeof d.state_snapshot === 'object' ? { ...d.state_snapshot } : {}
+          const stage = (snap.next_node as string) || (snap.phase as string) || 'running'
+          setSyllabusStep({ stage, data: snap })
+          setSyllabusStepVersion((v) => v + 1)
+        } else if (d.status === 'completed' && d.result) {
+          const result = d.result && typeof d.result === 'object' ? { ...d.result } : {}
+          setSyllabusStep({ stage: 'finalize', data: result })
+          setSyllabusStepVersion((v) => v + 1)
+        }
+        if (d.status === 'completed' || d.status === 'failed') setActiveSyllabusRun(null)
+      })
+      .catch((err) => {
+        console.error('Failed to load syllabus run', err)
+        setSyllabusRunStatus('failed')
+        setError('Run not found')
+        if (!isSyllabusRun) setActiveSyllabusRun(null)
+      })
+  }, [effectiveSyllabusRunId, isSyllabusRun])
+
+  // WebSocket: subscribe when effectiveSyllabusRunId is set (URL run or dashboard active run)
+  useEffect(() => {
+    if (!effectiveSyllabusRunId) {
+      syllabusWsRef.current?.close()
+      syllabusWsRef.current = null
+      setSyllabusWsConnected(false)
+      return
+    }
+    const ws = new WebSocket(`${WS_URL}/guru/ws/syllabus/runs/${effectiveSyllabusRunId}`)
+    syllabusWsRef.current = ws
+
+    ws.onopen = () => setSyllabusWsConnected(true)
+
+    ws.onmessage = (ev) => {
+      try {
+        const d = JSON.parse(ev.data as string) as {
+          stage: string
+          state: Record<string, unknown>
+          done: boolean
+          agent?: string
+          inference_model?: string
+        }
+        const state = d.state && typeof d.state === 'object' ? { ...d.state } : {}
+        setSyllabusStep({ stage: d.stage, data: state, agent: d.agent, inference_model: d.inference_model })
+        setSyllabusStepVersion((v) => v + 1)
+        setSyllabusRunStatus(d.done ? 'completed' : 'running')
+        setError(null)
+        if (d.done && !isSyllabusRun) setActiveSyllabusRun(null)
+      } catch (e) {
+        console.error('syllabus WS message parse error', e)
+      }
+    }
+
+    ws.onclose = () => {
+      if (syllabusWsRef.current === ws) syllabusWsRef.current = null
+      setSyllabusWsConnected(false)
+      // If we never got a message, connection was rejected (e.g. 401/404)
+      setSyllabusRunStatus((prev) => (prev === 'loading' ? 'failed' : prev))
+    }
+
+    ws.onerror = () => {
+      ws.close()
+    }
+
+    return () => {
+      ws.close()
+      if (syllabusWsRef.current === ws) syllabusWsRef.current = null
+      setSyllabusWsConnected(false)
+    }
+  }, [runId, isSyllabusRun])
+
+  const continueSyllabusStep = async () => {
+    if (!effectiveSyllabusRunId || syllabusRunStatus !== 'running' || syllabusStepBusy) return
+    setSyllabusStepBusy(true)
+    try {
+      const r = await axiosInstance.post(`/guru/syllabus/runs/${effectiveSyllabusRunId}/step`)
+      const d = r.data as { stage: string; state: Record<string, unknown>; done: boolean }
+      const state = d.state && typeof d.state === 'object' ? { ...d.state } : {}
+      setSyllabusStep({ stage: d.stage, data: state })
+      setSyllabusStepVersion((v) => v + 1)
+      if (d.done) setSyllabusRunStatus('completed')
+    } catch (e) {
+      console.error('Syllabus step error', e)
+      setSyllabusRunStatus('failed')
+    } finally {
+      setSyllabusStepBusy(false)
+    }
+  }
+
+  const rerunSyllabusFromScratch = async () => {
+    const courseId = activeSyllabusRun?.course_id ?? syllabusRunCourseId
+    if (!courseId) return
+    setSyllabusStepBusy(true)
+    setError(null)
+    try {
+      if (effectiveSyllabusRunId) {
+        await axiosInstance.delete(`/guru/syllabus/runs/${effectiveSyllabusRunId}`).catch(() => {})
+      }
+      const r = await axiosInstance.post(`/guru/courses/${courseId}/syllabus/run`)
+      const d = r.data as { run_id: string }
+      setActiveSyllabusRun({ run_id: d.run_id, course_id: courseId })
+      setSyllabusRunStatus('running')
+      setSyllabusStep(null)
+      setSyllabusStepVersion(0)
+      if (isSyllabusRun) {
+        navigate(`/dashboard/syllabus-run/${d.run_id}`, { replace: true })
+      }
+    } catch (e) {
+      console.error('Rerun syllabus error', e)
+      setError('Failed to start new run')
+    } finally {
+      setSyllabusStepBusy(false)
+    }
+  }
 
   // Load active sessions if no stream id provided (learning/test/chat sessions only; syllabus uses Courses page)
   useEffect(() => {
@@ -91,9 +248,10 @@ export function AgentDashboard() {
       return
     }
 
-    const streamUrl = isSyllabusRun
-      ? `${API_BASE}/guru/syllabus/runs/${runId}/stream`
-      : `${API_BASE}/guru/sessions/${sessionId}/stream`
+    // Syllabus runs: no stream — use step-by-step UI above
+    if (isSyllabusRun) return
+
+    const streamUrl = `${API_BASE}/guru/sessions/${sessionId}/stream`
     const eventSource = new EventSource(streamUrl, { withCredentials: true })
 
     eventSource.onopen = () => {
@@ -210,13 +368,42 @@ export function AgentDashboard() {
               failed_tasks: updatedTasks.filter((t) => t.status === 'failed').length,
             }
           })
+        } else if (data.type === 'node_result' && isSyllabusRun) {
+          // Syllabus: one step per graph node (generate_concepts, validate, add_concepts, add_module)
+          const stage = data.phase ?? 'node'
+          const stepData = (data.data as Record<string, unknown>) ?? {}
+          const taskData: AgentTask = {
+            agent_name: 'syllabus',
+            stage,
+            status: 'completed',
+            started_at: null,
+            completed_at: null,
+            error: null,
+            metadata: {
+              current_level: stepData.current_level,
+              current_concepts: stepData.current_concepts,
+              current_concepts_count: Array.isArray(stepData.current_concepts) ? (stepData.current_concepts as unknown[]).length : 0,
+              meets_threshold: stepData.meets_threshold,
+              needed_count: stepData.needed_count,
+              add_concepts_rounds: stepData.add_concepts_rounds,
+              modules_count: Array.isArray(stepData.modules) ? (stepData.modules as unknown[]).length : 0,
+              concepts_by_level: stepData.concepts_by_level,
+            },
+          }
+          setPipelineStatus((prev) => {
+            const tasks = [...(prev?.tasks ?? []), taskData]
+            return {
+              tasks,
+              current_stage: stage,
+              total_tasks: tasks.length,
+              completed_tasks: tasks.length,
+              failed_tasks: prev?.failed_tasks ?? 0,
+            }
+          })
         } else if (data.type === 'module_generated') {
-          // Handle module generation progress
           const moduleData = data.data || {}
-          console.log('📦 Module generated:', moduleData)
           setPipelineStatus((prev) => {
             if (!prev) return prev
-            // Update module progress
             return {
               ...prev,
               current_stage: 'generation',
@@ -316,8 +503,26 @@ export function AgentDashboard() {
     return `${duration}s`
   }
 
-  // If no stream id, show session selector
-  if (!streamId) {
+  // While checking for active syllabus runs on /dashboard, show loading
+  if (!streamId && activeSyllabusRunsLoading) {
+    return (
+      <div className="p-6 max-w-4xl mx-auto">
+        <div className="mb-6">
+          <h2 className="text-3xl font-bold mb-2">Agent Dashboard</h2>
+          <p className="text-gray-600">Monitor agent activity in real-time</p>
+        </div>
+        <div className="mb-4">
+          <Link to="/courses" className="text-sm text-blue-600 hover:text-blue-800">← Back to Courses</Link>
+        </div>
+        <div className="bg-white border rounded-lg p-6 text-center py-12 text-gray-500">
+          Checking for active runs…
+        </div>
+      </div>
+    )
+  }
+
+  // If no stream id and no active syllabus run, show session selector / empty state
+  if (!streamId && !activeSyllabusRun) {
     return (
       <div className="p-6 max-w-4xl mx-auto">
         <div className="mb-6">
@@ -367,13 +572,17 @@ export function AgentDashboard() {
     )
   }
 
+  // Display id for header (syllabus run on dashboard or session/run from URL)
+  const displayId = streamId ?? activeSyllabusRun?.run_id ?? ''
+  const showSyllabusRun = Boolean(effectiveSyllabusRunId)
+
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
           <div>
             <h2 className="text-3xl font-bold">Agent Dashboard</h2>
-            <p className="text-sm text-gray-600 mt-1">{isSyllabusRun ? 'Syllabus run' : 'Session'}: {streamId.substring(0, 12)}...</p>
+            <p className="text-sm text-gray-600 mt-1">{showSyllabusRun ? 'Syllabus run' : 'Session'}: {displayId ? `${displayId.substring(0, 12)}...` : '—'}</p>
           </div>
           <Link
             to="/dashboard"
@@ -385,11 +594,23 @@ export function AgentDashboard() {
       </div>
       
       <div className="mb-4 flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
-        <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-        <span className="text-sm font-medium text-gray-700">
-          {isConnected ? 'Connected to session stream' : 'Disconnected'}
-        </span>
-        {pipelineStatus && (
+        {showSyllabusRun ? (
+          <>
+            <div className={`w-3 h-3 rounded-full ${syllabusRunStatus === 'running' ? 'bg-blue-500' : syllabusRunStatus === 'completed' ? 'bg-green-500' : syllabusRunStatus === 'failed' ? 'bg-red-500' : 'bg-gray-400'}`} />
+            <span className="text-sm font-medium text-gray-700">
+              Syllabus run: {syllabusRunStatus}
+              {syllabusRunStatus === 'running' && ' – click Continue to run the next node'}
+            </span>
+          </>
+        ) : (
+          <>
+            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+            <span className="text-sm font-medium text-gray-700">
+              {isConnected ? 'Connected to session stream' : 'Disconnected'}
+            </span>
+          </>
+        )}
+        {!showSyllabusRun && pipelineStatus && (
           <div className="ml-auto flex items-center gap-4 text-sm text-gray-600">
             <div>
               Stage: <span className="font-semibold">{stageDisplayLabel(pipelineStatus.current_stage || '') || 'N/A'}</span>
@@ -418,19 +639,86 @@ export function AgentDashboard() {
         <div className="mb-4 p-3 bg-red-100 text-red-800 rounded border border-red-200">{error}</div>
       )}
 
-      {pipelineStatus && pipelineStatus.tasks.length > 0 ? (
+      {showSyllabusRun ? (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-semibold uppercase text-gray-500">Syllabus run</span>
+            {effectiveSyllabusRunId && (
+              <span className="text-xs text-gray-500">Run ID: {effectiveSyllabusRunId.slice(0, 8)}…</span>
+            )}
+            {syllabusWsConnected && (
+              <span className="inline-flex items-center gap-1 rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
+                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                Listening to socket
+              </span>
+            )}
+            {effectiveSyllabusRunId && !syllabusWsConnected && syllabusRunStatus === 'loading' && (
+              <span className="text-xs text-amber-600">Connecting…</span>
+            )}
+          </div>
+          <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
+            {syllabusRunStatus === 'loading' && !syllabusStep && <div className="text-xs text-gray-500">Loading run…</div>}
+            {syllabusRunStatus === 'running' && !syllabusStep && <div className="text-xs text-gray-500 mb-2">Click Continue to run the next node.</div>}
+            {syllabusStep && (
+              <SyllabusBuilderCard
+                key={`${effectiveSyllabusRunId}-${syllabusStep.stage}-${syllabusStepVersion}`}
+                payload={{
+                  stage: syllabusStep.stage,
+                  state: syllabusStep.data as SyllabusBuilderPayload['state'],
+                  done: syllabusRunStatus === 'completed',
+                  agent: syllabusStep.agent ?? undefined,
+                  inference_model: syllabusStep.inference_model ?? undefined,
+                }}
+              />
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              disabled={!effectiveSyllabusRunId || syllabusRunStatus !== 'running' || syllabusStepBusy}
+              onClick={continueSyllabusStep}
+              className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-gray-300 disabled:cursor-not-allowed"
+            >
+              {syllabusStepBusy ? 'Running…' : 'Continue'}
+            </button>
+            {(activeSyllabusRun?.course_id ?? syllabusRunCourseId) && (
+              <button
+                type="button"
+                disabled={syllabusStepBusy}
+                onClick={rerunSyllabusFromScratch}
+                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+              >
+                Rerun from scratch
+              </button>
+            )}
+            {syllabusRunStatus === 'completed' && <span className="text-sm text-green-600 font-medium">Syllabus complete</span>}
+            {syllabusRunStatus === 'failed' && <span className="text-sm text-red-600 font-medium">Run failed</span>}
+            {effectiveSyllabusRunId && !isSyllabusRun && (
+              <Link
+                to={`/dashboard/syllabus-run/${effectiveSyllabusRunId}`}
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                View full run →
+              </Link>
+            )}
+          </div>
+        </div>
+      ) : pipelineStatus && pipelineStatus.tasks.length > 0 ? (
         <div className="space-y-4">
           {(() => {
             // Group tasks by agent_name and stage, but for module_generator, also include module info to show each module separately
             const taskMap = new Map<string, AgentTask>()
             
-            pipelineStatus.tasks.forEach((task) => {
-              // For module_generator, include module info in key to show each module separately
-              let key = `${task.agent_name}-${task.stage}`
-              if (task.agent_name === 'module_generator' && task.metadata?.current_module) {
+            pipelineStatus.tasks.forEach((task, index) => {
+              // Syllabus: one row per node step (generate_concepts, validate, add_concepts, add_module per level)
+              let key: string
+              if (task.agent_name === 'syllabus') {
+                key = `syllabus-${index}-${task.stage}-${task.metadata?.current_level ?? ''}`
+              } else if (task.agent_name === 'module_generator' && task.metadata?.current_module) {
                 key = `${task.agent_name}-${task.stage}-${task.metadata.current_module}-${task.metadata.module_index || 'unknown'}`
+              } else {
+                key = `${task.agent_name}-${task.stage}`
               }
-              
               const existing = taskMap.get(key)
               
               if (!existing) {
@@ -570,7 +858,55 @@ export function AgentDashboard() {
                     <span className="text-gray-600">{task.metadata.module_position}</span>
                   </div>
                 )}
+                {task.agent_name === 'syllabus' && (
+                  <>
+                    {task.metadata.current_level != null && task.metadata.current_level !== '' && (
+                      <div>
+                        <span className="font-medium text-gray-700">Level:</span>{' '}
+                        <span className="text-gray-600">{String(task.metadata.current_level)}</span>
+                      </div>
+                    )}
+                    {task.metadata.current_concepts_count != null && (
+                      <div>
+                        <span className="font-medium text-gray-700">Concepts:</span>{' '}
+                        <span className="text-gray-600">{Number(task.metadata.current_concepts_count)}</span>
+                      </div>
+                    )}
+                    {task.metadata.meets_threshold != null && (
+                      <div>
+                        <span className="font-medium text-gray-700">Meets threshold:</span>{' '}
+                        <span className="text-gray-600">{String(task.metadata.meets_threshold)}</span>
+                      </div>
+                    )}
+                    {task.metadata.needed_count != null && Number(task.metadata.needed_count) > 0 && (
+                      <div>
+                        <span className="font-medium text-gray-700">Needed:</span>{' '}
+                        <span className="text-gray-600">{Number(task.metadata.needed_count)}</span>
+                      </div>
+                    )}
+                    {task.metadata.add_concepts_rounds != null && Number(task.metadata.add_concepts_rounds) > 0 && (
+                      <div>
+                        <span className="font-medium text-gray-700">Add rounds:</span>{' '}
+                        <span className="text-gray-600">{Number(task.metadata.add_concepts_rounds)}</span>
+                      </div>
+                    )}
+                    {task.metadata.modules_count != null && (
+                      <div>
+                        <span className="font-medium text-gray-700">Modules so far:</span>{' '}
+                        <span className="text-gray-600">{Number(task.metadata.modules_count)}</span>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
+
+              {/* Syllabus step: current_concepts list */}
+              {task.agent_name === 'syllabus' && Array.isArray(task.metadata?.current_concepts) && (task.metadata.current_concepts as string[]).length > 0 && (
+                <div className="mb-3 p-2 bg-gray-50 rounded border border-gray-200 text-xs">
+                  <span className="font-medium text-gray-700">current_concepts:</span>{' '}
+                  <span className="text-gray-600">{(task.metadata.current_concepts as string[]).join(', ')}</span>
+                </div>
+              )}
 
               {/* System Prompt Display */}
               {task.metadata.system_prompt && (
