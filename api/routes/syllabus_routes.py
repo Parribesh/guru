@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from api.config import get_db
 from api.models.models import Course, User as DbUser
-from api.schemas.guru_schemas import (
+from api.schemas.syllabus_run_schemas import (
     ListSyllabusRunsResponse,
     StartSyllabusRunResponse,
     SyllabusRunListItem,

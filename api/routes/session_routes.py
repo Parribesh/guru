@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session as DBSession
 from api.config import get_db
 from api.models.models import Conversation, Module, Course, ModuleProgress, Message
 from api.models.session import Session, SessionType, SessionStatus
-from api.schemas.guru_schemas import SendMessageRequest, SendMessageResponse
+from api.schemas.chat_schemas import SendMessageRequest, SendMessageResponse
 from api.schemas.user_schemas import User
 from api.utils.auth import get_current_user
 from api.utils.common import get_db_user_id, display_name, next_seq, syllabus_outline, iso_format

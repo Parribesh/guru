@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from api.config import get_db
 from api.models.models import Conversation, Message
-from api.schemas.guru_schemas import (
+from api.schemas.chat_schemas import (
     ConversationListResponse,
     ConversationResponse,
     ForkRequest,

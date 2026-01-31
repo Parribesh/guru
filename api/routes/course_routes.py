@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from api.config import get_db
 from api.models.models import Course, Module, ModuleProgress
-from api.schemas.guru_schemas import (
+from api.schemas.course_schemas import (
     CourseListResponse,
     CourseResponse,
     CreateCourseRequest,

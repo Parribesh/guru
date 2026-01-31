@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { getMe, updateUserPreferences, type UserInfo } from '../../api/auth_api'
 import { getOllamaModels, type OllamaModelItem } from '../../api/ollama_api'
+import { get_user_progress, type UserProgressCourse } from '../../api/progress_api'
 
 export function ProfilePage() {
   const [user, setUser] = useState<UserInfo | null>(null)
@@ -9,6 +11,7 @@ export function ProfilePage() {
   const [ollamaModels, setOllamaModels] = useState<OllamaModelItem[]>([])
   const [ollamaModelsError, setOllamaModelsError] = useState<string | null>(null)
   const [savingModel, setSavingModel] = useState(false)
+  const [progress, setProgress] = useState<UserProgressCourse[]>([])
 
   useEffect(() => {
     getMe()
@@ -26,6 +29,15 @@ export function ProfilePage() {
       .catch((e) => {
         console.error('Failed to load Ollama models', e)
         setOllamaModelsError('Could not load model list. Is Ollama running?')
+      })
+  }, [])
+
+  useEffect(() => {
+    get_user_progress()
+      .then((res) => setProgress(res.courses ?? []))
+      .catch((e) => {
+        console.error('Failed to load progress', e)
+        setProgress([])
       })
   }, [])
 
@@ -113,6 +125,61 @@ export function ProfilePage() {
                 {JSON.stringify(user.preferences, null, 2)}
               </pre>
             </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-8 rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-6 py-4">
+          <h2 className="text-lg font-semibold text-slate-800">Learning progress</h2>
+          <p className="mt-0.5 text-sm text-slate-500">
+            Your progress per course. Learning sessions use this to guide you through modules.
+          </p>
+        </div>
+        <div className="px-6 py-5">
+          {progress.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              No course progress yet. Start a course and complete modules to see your learning state here.
+            </p>
+          ) : (
+            <ul className="space-y-4">
+              {progress.map((c) => (
+                <li key={c.course_id} className="rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+                  <Link
+                    to={`/courses/${c.course_id}`}
+                    className="font-medium text-slate-800 hover:text-indigo-600"
+                  >
+                    {c.course_title}
+                  </Link>
+                  <span className="ml-2 text-sm text-slate-500">({c.subject})</span>
+                  <ul className="mt-3 space-y-2">
+                    {c.modules.map((m) => (
+                      <li
+                        key={m.module_id}
+                        className="flex items-center gap-3 text-sm"
+                      >
+                        <span
+                          className={`inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded px-1.5 text-xs font-medium ${
+                            m.passed ? 'bg-green-100 text-green-800' : 'bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          {m.order_index}
+                        </span>
+                        <span className="flex-1 text-slate-700">{m.title}</span>
+                        {m.passed ? (
+                          <span className="text-green-600 font-medium">Passed</span>
+                        ) : (
+                          <span className="text-slate-500">Not passed</span>
+                        )}
+                        <span className="text-slate-500">
+                          best {Math.round(m.best_score * 100)}% · {m.attempts_count} attempt{m.attempts_count !== 1 ? 's' : ''}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       </div>
