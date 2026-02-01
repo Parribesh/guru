@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import List, Tuple, Optional
 
 from agents.core.memory import Memory
-from agents.tutor_agent.history_store import TutorExchange, get_tutor_history_store
+from agents.tutor_agent.history_store import TutorExchange, TutorHistoryStore
 
 
 class TutorVectorMemory(Memory):
@@ -15,11 +15,18 @@ class TutorVectorMemory(Memory):
     Memory for tutor agent: uses tutor_lesson_history collection only.
     """
 
-    def __init__(self, conversation_id: str, k: int = 5, max_tokens: int = 100, agent_state=None):
+    def __init__(
+        self,
+        conversation_id: str,
+        history_store: TutorHistoryStore,
+        k: int = 5,
+        max_tokens: int = 100,
+        agent_state=None,
+    ):
         self.conversation_id = conversation_id
         self.k = k
         self.max_tokens = max_tokens
-        self.store = get_tutor_history_store()
+        self.store = history_store
         self._current_query: Optional[str] = None
         self.agent_state = agent_state
 

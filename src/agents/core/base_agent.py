@@ -13,6 +13,7 @@ class BaseAgent(ABC):
     """
     Defines the lifecycle and contract for all agents.
     system_prompt: optional default set at init; can be overridden per run via state.metadata["system_prompt"].
+    history_store: optional store for conversation history; each agent creates its own collection.
     """
     def __init__(
         self,
@@ -22,6 +23,7 @@ class BaseAgent(ABC):
         tools: List[Tool],
         memory: Memory,
         system_prompt: str = "",
+        history_store: Any = None,
     ):
         self.name = name
         self.llm = llm
@@ -29,6 +31,7 @@ class BaseAgent(ABC):
         self.memory = memory
         self.system_prompt = system_prompt or ""
         self.state = AgentState()
+        self.history_store = history_store
 
     #-----Public API-----
 
@@ -74,27 +77,31 @@ class BaseAgent(ABC):
 
 
     def _before_run(self, input: str):
-        # If the caller already preloaded history (e.g. from DB/session),
-        # do not clobber it with in-memory history.
-        # Only load history if memory is provided and not NoMemory
-        if self.memory and not self.state.history:
-            try:
-                # Check if memory has a load method (NoMemory returns empty list, which is fine)
-                history = self.memory.load()
-                if history:  # Only set if memory actually has history
-                    self.state.history = history
-            except Exception:
-                # If memory doesn't support loading or is NoMemory, that's fine
-                pass
+        """
+        Persist user message (if memory supports), load history. Base agent owns retrieval.
+        """
+        if not self.memory:
+            return
+        try:
+            if hasattr(self.memory, "save_user_message"):
+                self.memory.save_user_message(input)
+            if hasattr(self.memory, "set_query"):
+                self.memory.set_query(input)
+            history = self.memory.load()
+            if history:
+                self.state.history = history
+        except Exception:
+            pass
 
     def _after_run(self, input: str, result: Union[str, AsyncIterator[str]]):
-        # Skip save when caller persists messages and syncs to vector store (e.g. send-message route)
-        if getattr(self.state, "metadata", None) and self.state.metadata.get("_skip_memory_save"):
+        """
+        Save exchange to vector store after run. Base agent owns vector persistence.
+        API layer persists to DB (Message rows). Metadata must include
+        _user_message_id, _assistant_message_id, _message_seq when available.
+        """
+        if not self.memory:
             return
-        # Only save if memory is provided and not NoMemory
-        if self.memory:
-            try:
-                self.memory.save(input, str(result))
-            except Exception:
-                # If memory doesn't support saving (e.g., NoMemory), that's fine
-                pass
+        try:
+            self.memory.save(input, str(result))
+        except Exception:
+            pass

@@ -143,14 +143,3 @@ class HistoryStore:
 
         selected.sort(key=lambda e: e.seq)
         return [(e.user_message, e.assistant_message, e.agent_name) for e in selected]
-
-
-_history_store: Optional[HistoryStore] = None
-
-
-def get_history_store(persist_dir: Optional[str] = None) -> HistoryStore:
-    """Get or create the global history store instance."""
-    global _history_store
-    if _history_store is None:
-        _history_store = HistoryStore(persist_dir=persist_dir)
-    return _history_store

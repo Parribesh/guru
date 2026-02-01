@@ -30,11 +30,20 @@ class TutorService:
         Session must be resolved by Session.conversation_id == conversation_id.
         Uses user's profile ollama_model for inference.
         """
+        from api.bootstrap import build_registry
+        from agents.chat_agent.agent import ChatAgent
+
         model = ollama_model_for_user(self.db, session.user_id)
         llm = OllamaLLM(model=model)
         agent = TutorAgent(name="TutorAgent", llm=llm)
         agent_metadata = dict(session.agent_metadata or {})
         session_service = SessionService(self.db)
+        # Pass chat agent's history store so tutor exchanges can be synced for Q&A retrieval
+        chat_history_store = None
+        if getattr(session, "chat_conversation_id", None):
+            registry = build_registry()
+            chat_agent = ChatAgent(name="ChatAgent", llm=llm, registry=registry)
+            chat_history_store = chat_agent.history_store
         return stream_agent_response(
             self.db,
             session,
@@ -44,4 +53,5 @@ class TutorService:
             stream_kind="tutor",
             agent_metadata=agent_metadata,
             session_service=session_service,
+            chat_history_store=chat_history_store,
         )

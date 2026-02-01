@@ -10,6 +10,7 @@ from agents.core.llm import LLM
 from agents.core.memory import Memory
 from agents.core.no_memory import NoMemory
 from agents.tutor_agent.graph import build_tutor_graph, TutorGraphState
+from agents.tutor_agent.history_store import TutorHistoryStore
 
 logger = getLogger(__name__)
 
@@ -27,22 +28,23 @@ class TutorAgent(BaseAgent):
         max_history: int = 6,
         stream: bool = False,
     ):
+        history_store = TutorHistoryStore()
         super().__init__(
             name=name,
             llm=llm,
             tools=[],
             memory=memory or NoMemory(),
             system_prompt=system_prompt,
+            history_store=history_store,
         )
         self.max_history = max_history
         self._graph = build_tutor_graph(llm=llm, max_history=max_history)
         self.state.stream = stream
 
     def plan(self, input: str) -> Any:
-        if hasattr(self.memory, "set_query"):
-            self.memory.set_query(input)
-        memory_history = self.memory.load() if self.memory else []
-        history = memory_history if memory_history else self.state.history
+        """History is loaded by base agent _before_run; plan uses state.history."""
+        history = self.state.history or []
+        memory_history = history
         # Per-run metadata overrides init default
         system_prompt = str(
             self.state.metadata.get("system_prompt") or self.system_prompt or ""

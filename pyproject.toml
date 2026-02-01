@@ -26,6 +26,7 @@ dependencies = [
     "pytest",
     "pytest-asyncio",
     "networkx",
+    "psycopg2-binary"
 ]
 
 [project.optional-dependencies]

@@ -6,6 +6,7 @@ from agents.core.registry import AgentRegistry
 from agents.core.base_agent import BaseAgent
 from agents.core.tool import Tool
 from agents.core.memory import Memory
+from agents.chat_agent.history_store import HistoryStore
 from agents.chat_agent.memory import ChatAgentMemory
 from agents.core.llm import LLM
 from agents.chat_agent.graph import build_chat_graph, ChatGraphState
@@ -29,12 +30,14 @@ class ChatAgent(BaseAgent):
         max_history: int = 6,
         stream: bool = False,
     ):
+        history_store = HistoryStore()
         super().__init__(
             name=name,
             llm=llm,
             tools=tools or [],
             memory=memory or ChatAgentMemory(),
             system_prompt=system_prompt,
+            history_store=history_store,
         )
         self.registry = registry
         self.rag_agent_name = rag_agent_name
@@ -53,20 +56,10 @@ class ChatAgent(BaseAgent):
     def plan(self, input: str) -> Any:
         """
         Plan the agent's response.
-        
-        - Retrieves relevant memory (history) from vector store using semantic search
-        - Includes system prompt and memory in the plan
-        - Memory is retrieved based on semantic similarity to current query
+        History is loaded by base agent _before_run; plan uses state.history.
         """
-        # If memory is vector-based, set query for semantic retrieval
-        if hasattr(self.memory, 'set_query'):
-            self.memory.set_query(input)
-        
-        # Load memory (will use semantic search if vector-based)
-        memory_history = self.memory.load() if self.memory else []
-        
-        # Use memory history if available, otherwise fall back to state history
-        history = memory_history if memory_history else self.state.history
+        history = self.state.history or []
+        memory_history = history
         
         # Get system prompt: per-run metadata overrides init default
         system_prompt = str(

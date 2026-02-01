@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List, Tuple, Optional
 
 from agents.core.memory import Memory
-from agents.chat_agent.history_store import ConversationExchange, get_history_store
+from agents.chat_agent.history_store import ConversationExchange, HistoryStore
 
 
 class VectorMemory(Memory):
@@ -20,12 +20,20 @@ class VectorMemory(Memory):
     - Loads relevant history via semantic search (top k based on query similarity)
     """
     
-    def __init__(self, conversation_id: str, k: int = 5, max_tokens: int = 100, agent_state=None):
+    def __init__(
+        self,
+        conversation_id: str,
+        history_store: HistoryStore,
+        k: int = 5,
+        max_tokens: int = 100,
+        agent_state=None,
+    ):
         """
         Initialize vector memory.
         
         Args:
             conversation_id: Conversation ID to scope memory to
+            history_store: Agent's history store (from agent.history_store)
             k: Number of relevant history exchanges to retrieve
             max_tokens: Maximum tokens for retrieved history
             agent_state: Reference to agent state to access message IDs
@@ -33,7 +41,7 @@ class VectorMemory(Memory):
         self.conversation_id = conversation_id
         self.k = k
         self.max_tokens = max_tokens
-        self.store = get_history_store()
+        self.store = history_store
         self._current_query: Optional[str] = None
         self.agent_state = agent_state  # Reference to agent.state for accessing message IDs
     

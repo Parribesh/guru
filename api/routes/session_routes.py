@@ -18,7 +18,6 @@ from api.schemas.user_schemas import User
 from api.utils.auth import get_current_user
 from api.utils.common import get_db_user_id, display_name, next_seq, syllabus_outline, iso_format, next_objective_index
 from api.prompt_builders import build_tutor_system_prompt
-from api.utils.history_manager import store_exchange_from_messages
 from api.services.session_service import SessionService, SessionEventType
 from api.utils.logger import configure_logging
 
@@ -248,25 +247,13 @@ async def send_message(
         raise HTTPException(status_code=400, detail="Session is not active")
 
     conversation_id = session.conversation_id
-    seq_user = next_seq(conversation_id, db)
-    user_msg_id = str(uuid4())
-    user_msg = Message(
-        id=user_msg_id,
-        conversation_id=conversation_id,
-        role="user",
-        content=req.content,
-        seq=seq_user,
-    )
-    db.add(user_msg)
-    db.commit()
-    db.refresh(user_msg)
 
     # Get agent with user's ollama_model and configure for this conversation
     from api.bootstrap import build_registry
     from api.utils.common import ollama_model_for_user
-    from agents.chat_agent.vector_memory import VectorMemory
+    from agents.chat_agent.agent import ChatAgent
+    from agents.chat_agent.memory import ChatAgentMemory
     from agents.tutor_agent.agent import TutorAgent
-    from agents.tutor_agent.vector_memory import TutorVectorMemory
     from infra.llm.ollama import OllamaLLM
 
     model = ollama_model_for_user(db, user_id)
@@ -275,23 +262,21 @@ async def send_message(
 
     if session.agent_name == "tutor":
         agent = TutorAgent(name="TutorAgent", llm=llm)
-        agent.memory = TutorVectorMemory(
-            conversation_id=conversation_id,
-            agent_state=agent.state,
-        )
     else:
-        from agents.chat_agent.agent import ChatAgent
         agent = ChatAgent(name=session.agent_name or "ChatAgent", llm=llm, registry=registry)
-        agent.memory = VectorMemory(
-            conversation_id=conversation_id,
-            agent_state=agent.state,
-        )
-    agent.state.metadata = dict(session.agent_metadata or {})
-    agent.state.metadata["_user_message_id"] = user_msg_id
-    agent.state.metadata["_message_seq"] = seq_user
-    agent.state.metadata["_skip_memory_save"] = True
 
-    # Run agent (sync) to get full assistant response
+    memory = ChatAgentMemory(
+        db=db,
+        conversation_id=conversation_id,
+        history_store=agent.history_store,
+        message_cls=Message,
+        next_seq_fn=next_seq,
+        agent_state=agent.state,
+    )
+    agent.memory = memory
+    agent.state.metadata = dict(session.agent_metadata or {})
+
+    # Run agent; ChatAgentMemory persists user msg in _before_run, assistant msg in _after_run
     try:
         answer = agent.run(req.content)
         if answer is None:
@@ -301,24 +286,11 @@ async def send_message(
         logger.exception("Agent run failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Agent failed: {str(e)}")
 
-    seq_assistant = next_seq(conversation_id, db)
-    assistant_msg_id = str(uuid4())
-    assistant_msg = Message(
-        id=assistant_msg_id,
-        conversation_id=conversation_id,
-        role="assistant",
-        content=answer,
-        seq=seq_assistant,
-    )
-    db.add(assistant_msg)
-    db.commit()
-    db.refresh(assistant_msg)
-
-    history_store_kind = "tutor" if session.agent_name == "tutor" else "chat"
-    store_exchange_from_messages(
-        conversation_id, user_msg_id, assistant_msg_id, db,
-        history_store_kind=history_store_kind,
-    )
+    user_msg_id = agent.state.metadata.get("_user_message_id", "")
+    assistant_msg_id = agent.state.metadata.get("_assistant_message_id", "")
+    assistant_msg = db.query(Message).filter(Message.id == assistant_msg_id).first()
+    seq_assistant = assistant_msg.seq if assistant_msg else 0
+    created_at = assistant_msg.created_at if assistant_msg else None
 
     session_service.update_session_state(session_id, {}, None)
 
@@ -327,7 +299,7 @@ async def send_message(
         assistant_message_id=assistant_msg_id,
         assistant_content=answer,
         assistant_seq=seq_assistant,
-        created_at=iso_format(assistant_msg.created_at),
+        created_at=iso_format(created_at) if created_at else iso_format(datetime.utcnow()),
     )
 
 

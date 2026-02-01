@@ -22,8 +22,11 @@ async def run_stream(
     if memory is None:
         from agents.chat_agent.vector_memory import VectorMemory
 
+        if not getattr(agent, "history_store", None):
+            raise ValueError("Chat agent must have history_store")
         memory = VectorMemory(
             conversation_id=conversation_id,
+            history_store=agent.history_store,
             agent_state=agent.state,
         )
     agent.memory = memory

@@ -4,7 +4,7 @@ Separate ChromaDB collection from chat (conversation_history).
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 from infra.vector.chroma_store import ChromaStore
 from agents.core.token_utils import estimate_tokens, truncate_text
@@ -125,14 +125,3 @@ class TutorHistoryStore:
 
         selected.sort(key=lambda e: e.seq)
         return [(e.user_message, e.assistant_message) for e in selected]
-
-
-_tutor_history_store: Optional[TutorHistoryStore] = None
-
-
-def get_tutor_history_store(persist_dir: Optional[str] = None) -> TutorHistoryStore:
-    """Get or create the global tutor history store instance."""
-    global _tutor_history_store
-    if _tutor_history_store is None:
-        _tutor_history_store = TutorHistoryStore(persist_dir=persist_dir)
-    return _tutor_history_store
