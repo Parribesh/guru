@@ -23,12 +23,19 @@ class ChatAgent(BaseAgent):
         registry: Optional[AgentRegistry] = None,
         tools: Optional[List[Tool]] = None,
         memory: Optional[Memory] = None,
+        system_prompt: str = "",
         rag_agent_name: str = "rag",
         rag_k: int = 5,
         max_history: int = 6,
         stream: bool = False,
     ):
-        super().__init__(name=name, llm=llm, tools=tools or [], memory=memory or ChatAgentMemory())
+        super().__init__(
+            name=name,
+            llm=llm,
+            tools=tools or [],
+            memory=memory or ChatAgentMemory(),
+            system_prompt=system_prompt,
+        )
         self.registry = registry
         self.rag_agent_name = rag_agent_name
         self.rag_k = rag_k
@@ -61,8 +68,10 @@ class ChatAgent(BaseAgent):
         # Use memory history if available, otherwise fall back to state history
         history = memory_history if memory_history else self.state.history
         
-        # Get system prompt and other metadata
-        system_prompt = str(self.state.metadata.get("system_prompt") or "")
+        # Get system prompt: per-run metadata overrides init default
+        system_prompt = str(
+            self.state.metadata.get("system_prompt") or self.system_prompt or ""
+        )
         max_tokens = self.state.metadata.get("max_tokens")
         conversation_id = self.state.metadata.get("conversation_id")
         
@@ -108,12 +117,16 @@ class ChatAgent(BaseAgent):
         system_prompt = plan_metadata.get("system_prompt", "")
         retrieved_memory = plan_metadata.get("retrieved_memory", [])
         
-        # Format memory for display
+        # Format memory for display (items may be (u, a) or (u, a, agent_name))
         if retrieved_memory:
-            memory_text = "\n\n".join([
-                f"User: {u}\nAssistant: {a}"
-                for u, a in retrieved_memory
-            ])
+            parts = []
+            for item in retrieved_memory:
+                u, a = (item[0], item[1]) if len(item) >= 2 else ("", "")
+                if len(item) >= 3 and item[2] == "tutor":
+                    parts.append(f"[Tutor lesson] User: {u}\nTutor: {a}")
+                else:
+                    parts.append(f"User: {u}\nAssistant: {a}")
+            memory_text = "\n\n".join(parts)
             # Yield memory_retrieved event as SSE
             yield f"event: memory_retrieved\ndata: {json.dumps({'history': memory_text})}\n\n"
         

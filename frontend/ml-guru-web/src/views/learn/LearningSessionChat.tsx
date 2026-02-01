@@ -1,43 +1,57 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { API_URL } from '../../config/config'
+import { axiosInstance } from '../../config/axiosConfig'
 import { chatRequestSchema } from '../../schemas/restSchemas'
 import { fetchConversationMessages, type Message } from '../../api/chat_api'
+import type { Interaction } from './types'
+import { buildInteractionsFromMessages, buildChatInteractionsFromMessages } from './utils'
+import LearningSessionHeader from './LearningSessionHeader'
+import LessonContent from './LessonContent'
+import type { LearningContext } from './LessonContent'
+import ChatSidebar from './ChatSidebar'
+import InteractionOptionsModal from './InteractionOptionsModal'
+import AgentStateModal from './AgentStateModal'
+import ModuleProgressModal from './ModuleProgressModal'
 
-interface InteractionMetadata {
-  retrievedHistory?: string
-  systemPrompt?: string
-  timestamp: string
-}
-
-interface Interaction {
-  id: string
-  userMessage: Message
-  assistantMessage: Message | null
-  metadata: InteractionMetadata
-  isStreaming?: boolean
-}
-
-export const LearningSessionChat = () => {
-  const [message, setMessage] = useState('')
+export default function LearningSessionChat() {
+  const [chatMessage, setChatMessage] = useState('')
   const [loading, setLoading] = useState(false)
+  const [chatLoading, setChatLoading] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
+  const [chatConversationId, setChatConversationId] = useState<string | null>(null)
+  const [learningContext, setLearningContext] = useState<LearningContext | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [moduleId, setModuleId] = useState<string | null>(null)
+  const [chatMessages, setChatMessages] = useState<Message[]>([])
   const [streamingContent, setStreamingContent] = useState<string>('')
+  const [chatStreamingContent, setChatStreamingContent] = useState<string>('')
   const [systemPrompt, setSystemPrompt] = useState<string>('')
   const [showOptions, setShowOptions] = useState(false)
+  const [showModuleProgress, setShowModuleProgress] = useState(false)
+  const [completeLoading, setCompleteLoading] = useState(false)
+  const [agentContext, setAgentContext] = useState<Record<string, unknown> | null>(null)
+  const [agentContextLoading, setAgentContextLoading] = useState(false)
   const [interactions, setInteractions] = useState<Interaction[]>([])
+  const [chatInteractions, setChatInteractions] = useState<Interaction[]>([])
   const [selectedInteractionId, setSelectedInteractionId] = useState<string | null>(null)
-  
+  const [lessonMessagesLoaded, setLessonMessagesLoaded] = useState(false)
+
   const streamRef = useRef<EventSource | null>(null)
   const inFlightRef = useRef(false)
   const requestIdRef = useRef<string | null>(null)
+  /** conversationId we've already sent the initial tutor introduce message for */
+  const sentInitialTutorForRef = useRef<string | null>(null)
   const currentInteractionIdRef = useRef<string | null>(null)
+  const currentChatInteractionIdRef = useRef<string | null>(null)
+  const preservedLessonMetadataRef = useRef<{ retrievedHistory?: string; systemPrompt?: string } | null>(null)
+  const preservedChatMetadataRef = useRef<{ retrievedHistory?: string; systemPrompt?: string } | null>(null)
   const navigate = useNavigate()
   const params = useParams<{ conversationId: string }>()
 
-  const historyEndRef = useRef<HTMLDivElement>(null)
-  const historyContainerRef = useRef<HTMLDivElement>(null)
+  const lessonContentEndRef = useRef<HTMLDivElement>(null)
+  const chatHistoryEndRef = useRef<HTMLDivElement>(null)
+  const chatHistoryContainerRef = useRef<HTMLDivElement>(null)
 
   const newRequestId = () => {
     return crypto.randomUUID()
@@ -56,7 +70,7 @@ export const LearningSessionChat = () => {
     }
   }, [])
 
-  // Load conversation from URL params
+  // Load conversation from URL params (lesson conversation)
   useEffect(() => {
     if (params.conversationId) {
       setConversationId(params.conversationId)
@@ -65,211 +79,206 @@ export const LearningSessionChat = () => {
     }
   }, [params.conversationId, navigate])
 
-  // Load messages when conversation changes
-  useEffect(() => {
-    if (!conversationId) {
-      setMessages([])
-      setSystemPrompt('')
-      setInteractions([])
-      return
-    }
-    fetchConversationMessages(conversationId)
-      .then((msgs) => {
-        setMessages(msgs)
-        // Extract system prompt from messages if it exists
-        const sysMsg = msgs.find((m) => m.role === 'system')
-        if (sysMsg) {
-          setSystemPrompt(sysMsg.content)
+  // Fetch session context: session_id, chat_conversation_id, learning context (concept/module/progress)
+  const fetchLearningContext = useCallback(() => {
+    if (!conversationId) return
+    axiosInstance
+      .get(`/guru/learning/${conversationId}/context`)
+      .then((res) => {
+        const ctx = res.data as {
+          session?: { id?: string; chat_conversation_id?: string }
+          session_metadata?: { user_name?: string }
+          module?: {
+            id?: string
+            current_objective?: string
+            title?: string
+            objectives?: string[]
+            current_objective_index?: number
+            progress?: {
+              best_score: number
+              attempts_count: number
+              passed: boolean
+              completed_objectives: number[]
+            }
+          }
+          course?: { title?: string }
         }
-        // Build interactions from messages
-        buildInteractionsFromMessages(msgs)
+        const chatId = ctx?.session?.chat_conversation_id ?? null
+        const sid = ctx?.session?.id ?? null
+        const mid = ctx?.module?.id ?? null
+        setChatConversationId(chatId)
+        setSessionId(sid)
+        setModuleId(mid)
+        if (ctx?.module) {
+          const objectives = ctx.module.objectives ?? []
+          const total = objectives.length
+          const idx = ctx.module.current_objective_index ?? 0
+          setLearningContext({
+            current_objective: ctx.module.current_objective,
+            module_title: ctx.module.title,
+            course_title: ctx.course?.title,
+            current_concept_index: idx,
+            concepts_total: total,
+            concept_position_label: total > 0 ? `${idx + 1} of ${total}` : undefined,
+            progress: ctx.module.progress,
+            objectives,
+          })
+        } else {
+          setLearningContext(null)
+        }
       })
-      .catch((e) => console.error('failed to fetch messages', e))
+      .catch((e) => console.error('failed to load session context', e))
   }, [conversationId])
 
-  const buildInteractionsFromMessages = (msgs: Message[]) => {
-    const visibleMessages = msgs.filter((m) => m.role !== 'system')
-    const newInteractions: Interaction[] = []
-    let pendingUser: Message | null = null
-
-    // Preserve metadata from existing interactions by creating a map
-    // Use interaction ID as key (user_id_assistant_id) for better matching
-    const existingMetadataMap = new Map<string, InteractionMetadata>()
-    interactions.forEach((interaction) => {
-      if (interaction.assistantMessage) {
-        const key = `${interaction.userMessage.id}_${interaction.assistantMessage.id}`
-        if (interaction.metadata.retrievedHistory || interaction.metadata.systemPrompt) {
-          existingMetadataMap.set(key, interaction.metadata)
-        }
-      }
-    })
-
-    for (const msg of visibleMessages) {
-      if (msg.role === 'user') {
-        pendingUser = msg
-      } else if (msg.role === 'assistant' && pendingUser) {
-        // Preserve metadata if it exists, or use metadata from database
-        const interactionKey = `${pendingUser.id}_${msg.id}`
-        const existingMetadata = existingMetadataMap.get(interactionKey) || {}
-        
-        // Handle both parsed object and potential string (defensive)
-        let dbMetadata = msg.interaction_metadata || {}
-        if (typeof dbMetadata === 'string') {
-          try {
-            dbMetadata = JSON.parse(dbMetadata)
-          } catch (e) {
-            console.warn('Failed to parse interaction_metadata:', e)
-            dbMetadata = {}
-          }
-        }
-        
-        // Merge: existing (from state) > database > undefined
-        newInteractions.push({
-          id: interactionKey,
-          userMessage: pendingUser,
-          assistantMessage: msg,
-          metadata: {
-            timestamp: msg.created_at,
-            retrievedHistory: existingMetadata.retrievedHistory || dbMetadata.retrieved_history || undefined,
-            systemPrompt: existingMetadata.systemPrompt || dbMetadata.system_prompt || undefined,
-          },
-        })
-        pendingUser = null
-      }
-    }
-
-    // Handle orphaned user message
-    if (pendingUser) {
-      const existingMetadata = existingMetadataMap.get(`${pendingUser.id}_pending`) || {}
-      newInteractions.push({
-        id: `${pendingUser.id}_pending`,
-        userMessage: pendingUser,
-        assistantMessage: null,
-        metadata: {
-          timestamp: pendingUser.created_at,
-          ...existingMetadata,
-        },
-      })
-    }
-
-    setInteractions(newInteractions)
-  }
-
-  // Auto-scroll to bottom when interactions change
   useEffect(() => {
-    if (!historyEndRef.current) return
-    historyEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [interactions.length, streamingContent])
+    fetchLearningContext()
+  }, [fetchLearningContext])
 
-  const refreshMessages = () => {
-    if (!conversationId) return
+  const handleCompleteObjective = useCallback(() => {
+    if (!sessionId) return
+    setCompleteLoading(true)
+    axiosInstance
+      .post(`/guru/sessions/${sessionId}/complete-objective`)
+      .then(() => {
+        // Create new session for next concept (same module; backend picks next objective)
+        if (!moduleId) {
+          fetchLearningContext()
+          return
+        }
+        return axiosInstance
+          .post(`/guru/sessions?session_type=learning&module_id=${encodeURIComponent(moduleId)}`)
+          .then((res) => {
+            const data = res.data as { conversation_id?: string }
+            const nextConversationId = data?.conversation_id
+            if (nextConversationId) {
+              navigate(`/learn/${nextConversationId}`, { replace: true })
+            } else {
+              fetchLearningContext()
+            }
+          })
+          .catch((e) => {
+            // All objectives done (400) or other error: just refresh current context
+            if (e?.response?.status === 400 && e?.response?.data?.detail?.includes('Take the module test')) {
+              // Optionally show message: all concepts done, take module test
+            }
+            fetchLearningContext()
+          })
+      })
+      .catch((e) => console.error('failed to complete objective', e))
+      .finally(() => setCompleteLoading(false))
+  }, [sessionId, moduleId, fetchLearningContext, navigate])
+
+  // Load lesson messages when conversation (lesson) changes
+  useEffect(() => {
+    if (!conversationId) {
+      setSystemPrompt('')
+      setInteractions([])
+      setLessonMessagesLoaded(false)
+      return
+    }
+    setLessonMessagesLoaded(false)
     fetchConversationMessages(conversationId)
       .then((msgs) => {
-        setMessages(msgs)
-        buildInteractionsFromMessages(msgs)
+        const sysMsg = msgs.find((m) => m.role === 'system')
+        if (sysMsg) setSystemPrompt(sysMsg.content)
+        setInteractions((prev) => buildInteractionsFromMessages(msgs, prev))
       })
       .catch((e) => console.error('failed to fetch messages', e))
-  }
+      .finally(() => setLessonMessagesLoaded(true))
+  }, [conversationId])
 
-  const handleSubmit = async () => {
-    const trimmed = message.trim()
-    if (!trimmed || !conversationId) return
-
-    // Prevent accidental double-submits
-    if (inFlightRef.current && streamRef.current) {
-      streamRef.current.close()
-      streamRef.current = null
+  // Load chat (Q&A) messages when chat conversation is available
+  useEffect(() => {
+    if (!chatConversationId) {
+      setChatMessages([])
+      setChatInteractions([])
+      return
     }
+    fetchConversationMessages(chatConversationId)
+      .then((msgs) => {
+        setChatMessages(msgs)
+        setChatInteractions(buildChatInteractionsFromMessages(msgs))
+      })
+      .catch((e) => console.error('failed to fetch chat messages', e))
+  }, [chatConversationId])
 
+  // When session starts with no lesson messages, ask tutor to introduce the user to the concept
+  useEffect(() => {
+    if (
+      !conversationId ||
+      !lessonMessagesLoaded ||
+      interactions.length > 0 ||
+      sentInitialTutorForRef.current === conversationId ||
+      !learningContext?.current_objective
+    ) {
+      return
+    }
+    sentInitialTutorForRef.current = conversationId
     inFlightRef.current = true
-    setLoading(true)
-    setStreamingContent('')
+    const introduceMessage = `Introduce the concept "${learningContext.current_objective}" with a short paragraph about the topic.`
     const rid = newRequestId()
     requestIdRef.current = rid
     const interactionId = newRequestId()
-    currentInteractionIdRef.current = interactionId
-
-    // Create new interaction for this exchange
     const userMessage: Message = {
       id: `temp_${Date.now()}`,
       conversation_id: conversationId,
       role: 'user',
-      content: trimmed,
-      seq: messages.length + 1,
+      content: introduceMessage,
+      seq: 1,
       created_at: new Date().toISOString(),
     }
-
-    setInteractions((prev) => [
-      ...prev,
-      {
-        id: interactionId,
-        userMessage,
-        assistantMessage: null,
-        metadata: {
-          timestamp: userMessage.created_at,
-        },
-        isStreaming: true,
-      },
-    ])
-
-    const payload = {
-      message: trimmed,
-      conversation_id: conversationId,
+    const newInteraction = {
+      id: interactionId,
+      userMessage,
+      assistantMessage: null as Message | null,
+      metadata: { timestamp: userMessage.created_at },
+      isStreaming: true as const,
     }
+    setLoading(true)
+    setStreamingContent('')
+    currentInteractionIdRef.current = interactionId
+    setInteractions([newInteraction])
+    const payload = { message: introduceMessage, conversation_id: conversationId }
     const validatedPayload = chatRequestSchema.parse(payload)
-    const url = new URL(`${API_URL}/guru/learning/${conversationId}/stream`)
+    const url = new URL(`${API_URL}/guru/learning/tutor/${conversationId}/stream`)
     url.searchParams.set('payload', JSON.stringify(validatedPayload))
     url.searchParams.set('rid', rid)
-    
-    const source = new EventSource(url.toString(), {
-      withCredentials: true,
-    })
+    const source = new EventSource(url.toString(), { withCredentials: true })
     streamRef.current = source
-
-    // Handle system_prompt event
+    preservedLessonMetadataRef.current = {}
     source.addEventListener('system_prompt', (event) => {
       try {
-        const payload = JSON.parse((event as MessageEvent).data as string) as { system_prompt?: string }
-        setSystemPrompt(payload.system_prompt ?? '')
-        // Update current interaction metadata
+        const data = JSON.parse((event as MessageEvent).data as string) as { system_prompt?: string }
+        setSystemPrompt(data.system_prompt ?? '')
+        preservedLessonMetadataRef.current!.systemPrompt = data.system_prompt
         setInteractions((prev) =>
-          prev.map((interaction) =>
-            interaction.id === interactionId
-              ? { ...interaction, metadata: { ...interaction.metadata, systemPrompt: payload.system_prompt } }
-              : interaction
+          prev.map((i) =>
+            i.id === interactionId ? { ...i, metadata: { ...i.metadata, systemPrompt: data.system_prompt } } : i
           )
         )
       } catch (e) {
         console.error('failed to parse system_prompt', e)
       }
     })
-
-    // Handle history_retrieved event
     source.addEventListener('history_retrieved', (event) => {
       try {
-        const payload = JSON.parse((event as MessageEvent).data as string) as { history?: string }
-        // Update current interaction metadata
+        const data = JSON.parse((event as MessageEvent).data as string) as { history?: string }
+        preservedLessonMetadataRef.current!.retrievedHistory = data.history
         setInteractions((prev) =>
-          prev.map((interaction) =>
-            interaction.id === interactionId
-              ? { ...interaction, metadata: { ...interaction.metadata, retrievedHistory: payload.history } }
-              : interaction
+          prev.map((i) =>
+            i.id === interactionId ? { ...i, metadata: { ...i.metadata, retrievedHistory: data.history } } : i
           )
         )
       } catch (e) {
         console.error('failed to parse history_retrieved', e)
       }
     })
-
-    // Tokens / chunks (default SSE "message" event)
     source.onmessage = (event) => {
       if (requestIdRef.current !== rid) return
-      setStreamingContent((prev) => prev + (event.data as string))
-      if (!loading) return
+      const chunk = event.data as string
+      setStreamingContent((prev) => prev + chunk)
       setLoading(false)
     }
-
-    // Server sends: event: end  data: END
     source.addEventListener('end', () => {
       if (requestIdRef.current !== rid) return
       source.close()
@@ -277,51 +286,29 @@ export const LearningSessionChat = () => {
       inFlightRef.current = false
       setLoading(false)
       setStreamingContent('')
-      
-      // Preserve metadata from current interaction before refreshing
-      // The metadata was set via SSE events and should be in state
-      const currentInteraction = interactions.find(i => i.id === interactionId)
-      const preservedMetadata = currentInteraction?.metadata
-      
-      // Refresh messages to get final assistant message from DB
-      // The buildInteractionsFromMessages will try to preserve metadata,
-      // but we'll also restore it after refresh to be safe
+      const preservedMetadata = preservedLessonMetadataRef.current
       refreshMessages()
-      
-      // After refresh completes, restore metadata if it was lost
-      // This handles the case where DB doesn't have metadata yet or it wasn't loaded
-      if (preservedMetadata && (preservedMetadata.retrievedHistory || preservedMetadata.systemPrompt)) {
+      if (preservedMetadata?.retrievedHistory || preservedMetadata?.systemPrompt) {
         setTimeout(() => {
           setInteractions((prev) =>
-            prev.map((interaction) => {
-              if (interaction.id === interactionId) {
-                // Only restore if metadata is missing
-                const needsRestore = 
-                  (!interaction.metadata.retrievedHistory && preservedMetadata.retrievedHistory) ||
-                  (!interaction.metadata.systemPrompt && preservedMetadata.systemPrompt)
-                
-                if (needsRestore) {
-                  return {
-                    ...interaction,
-                    metadata: {
-                      ...interaction.metadata,
-                      retrievedHistory: interaction.metadata.retrievedHistory || preservedMetadata.retrievedHistory,
-                      systemPrompt: interaction.metadata.systemPrompt || preservedMetadata.systemPrompt,
-                    }
-                  }
-                }
+            prev.map((i) => {
+              if (i.id !== interactionId) return i
+              return {
+                ...i,
+                metadata: {
+                  ...i.metadata,
+                  retrievedHistory: i.metadata.retrievedHistory ?? preservedMetadata?.retrievedHistory,
+                  systemPrompt: i.metadata.systemPrompt ?? preservedMetadata?.systemPrompt,
+                },
               }
-              return interaction
             })
           )
-        }, 200) // Give time for refresh to complete
+        }, 200)
       }
-      
+      preservedLessonMetadataRef.current = null
       currentInteractionIdRef.current = null
     })
-
-    source.onerror = (event) => {
-      console.error('stream error', event)
+    source.onerror = () => {
       source.close()
       if (streamRef.current === source) streamRef.current = null
       inFlightRef.current = false
@@ -329,290 +316,324 @@ export const LearningSessionChat = () => {
       setStreamingContent('')
       currentInteractionIdRef.current = null
     }
+  }, [conversationId, lessonMessagesLoaded, interactions.length, learningContext?.current_objective])
 
-    setMessage('')
+  // Auto-scroll lesson content when tutor response updates
+  useEffect(() => {
+    lessonContentEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [interactions.length, streamingContent])
+
+  // Auto-scroll chat sidebar when messages or streaming change
+  useEffect(() => {
+    chatHistoryEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [chatInteractions.length, chatStreamingContent])
+
+  const refreshChatMessages = () => {
+    if (!chatConversationId) return
+    fetchConversationMessages(chatConversationId)
+      .then((msgs) => {
+        setChatMessages(msgs)
+        setChatInteractions(buildChatInteractionsFromMessages(msgs))
+      })
+      .catch((e) => console.error('failed to refresh chat messages', e))
   }
 
-  const canSend = useMemo(() => message.trim().length > 0 && !loading && conversationId !== null, [message, loading, conversationId])
+  const refreshMessages = () => {
+    if (!conversationId) return
+    fetchConversationMessages(conversationId)
+      .then((msgs) => {
+        setInteractions((prev) => buildInteractionsFromMessages(msgs, prev))
+      })
+      .catch((e) => console.error('failed to fetch messages', e))
+  }
 
-  // Combine interactions with streaming content
-  const displayInteractions = useMemo(() => {
-    const result = [...interactions]
-    
-    // If streaming, update the last interaction or create a streaming one
-    if (streamingContent && currentInteractionIdRef.current) {
-      const lastIndex = result.length - 1
-      if (lastIndex >= 0 && result[lastIndex].id === currentInteractionIdRef.current) {
-        // Update existing interaction with streaming content
-        result[lastIndex] = {
-          ...result[lastIndex],
-          assistantMessage: {
-            id: '__streaming__',
-            conversation_id: conversationId || '',
-            role: 'assistant',
-            content: streamingContent,
-            seq: result[lastIndex].userMessage.seq + 1,
-            created_at: new Date().toISOString(),
-          },
-          isStreaming: true,
-        }
+  const runStream = (
+    trimmed: string,
+    targetConvId: string,
+    isChat: boolean,
+    interactionId: string,
+    rid: string,
+    newInteraction: { id: string; userMessage: Message; assistantMessage: Message | null; metadata: { timestamp: string }; isStreaming: true }
+  ) => {
+    if (inFlightRef.current && streamRef.current) {
+      streamRef.current.close()
+      streamRef.current = null
+    }
+    inFlightRef.current = true
+    if (isChat) {
+      setChatLoading(true)
+      setChatStreamingContent('')
+      currentChatInteractionIdRef.current = interactionId
+      setChatInteractions((prev) => [...prev, newInteraction])
+    } else {
+      setLoading(true)
+      setStreamingContent('')
+      currentInteractionIdRef.current = interactionId
+      setInteractions((prev) => [...prev, newInteraction])
+    }
+
+    const payload = { message: trimmed, conversation_id: targetConvId }
+    const validatedPayload = chatRequestSchema.parse(payload)
+    const streamPath = isChat ? 'chat' : 'tutor'
+    const url = new URL(`${API_URL}/guru/learning/${streamPath}/${targetConvId}/stream`)
+    url.searchParams.set('payload', JSON.stringify(validatedPayload))
+    url.searchParams.set('rid', rid)
+    const source = new EventSource(url.toString(), { withCredentials: true })
+    streamRef.current = source
+
+    if (isChat) preservedChatMetadataRef.current = {}
+    else preservedLessonMetadataRef.current = {}
+
+    source.addEventListener('system_prompt', (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent).data as string) as { system_prompt?: string }
+        if (!isChat) setSystemPrompt(data.system_prompt ?? '')
+        if (isChat) preservedChatMetadataRef.current!.systemPrompt = data.system_prompt
+        else preservedLessonMetadataRef.current!.systemPrompt = data.system_prompt
+        const updater = (i: Interaction) =>
+          i.id === interactionId ? { ...i, metadata: { ...i.metadata, systemPrompt: data.system_prompt } } : i
+        if (isChat) setChatInteractions((prev) => prev.map(updater))
+        else setInteractions((prev) => prev.map(updater))
+      } catch (e) {
+        console.error('failed to parse system_prompt', e)
+      }
+    })
+
+    source.addEventListener('history_retrieved', (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent).data as string) as { history?: string }
+        if (isChat) preservedChatMetadataRef.current!.retrievedHistory = data.history
+        else preservedLessonMetadataRef.current!.retrievedHistory = data.history
+        const updater = (i: Interaction) =>
+          i.id === interactionId ? { ...i, metadata: { ...i.metadata, retrievedHistory: data.history } } : i
+        if (isChat) setChatInteractions((prev) => prev.map(updater))
+        else setInteractions((prev) => prev.map(updater))
+      } catch (e) {
+        console.error('failed to parse history_retrieved', e)
+      }
+    })
+
+    source.onmessage = (event) => {
+      if (requestIdRef.current !== rid) return
+      const chunk = event.data as string
+      if (isChat) {
+        setChatStreamingContent((prev) => prev + chunk)
+        setChatLoading(false)
+      } else {
+        setStreamingContent((prev) => prev + chunk)
+        setLoading(false)
       }
     }
-    
+
+    source.addEventListener('end', () => {
+      if (requestIdRef.current !== rid) return
+      source.close()
+      if (streamRef.current === source) streamRef.current = null
+      inFlightRef.current = false
+      if (isChat) {
+        setChatLoading(false)
+        setChatStreamingContent('')
+        const preservedMetadata = preservedChatMetadataRef.current
+        refreshChatMessages()
+        if (preservedMetadata?.retrievedHistory || preservedMetadata?.systemPrompt) {
+          setTimeout(() => {
+            setChatInteractions((prev) =>
+              prev.map((i) => {
+                if (i.id !== interactionId) return i
+                const need =
+                  (!i.metadata.retrievedHistory && preservedMetadata.retrievedHistory) ||
+                  (!i.metadata.systemPrompt && preservedMetadata.systemPrompt)
+                if (!need) return i
+                return {
+                  ...i,
+                  metadata: {
+                    ...i.metadata,
+                    retrievedHistory: i.metadata.retrievedHistory ?? preservedMetadata.retrievedHistory,
+                    systemPrompt: i.metadata.systemPrompt ?? preservedMetadata.systemPrompt,
+                  },
+                }
+              })
+            )
+          }, 200)
+        }
+        preservedChatMetadataRef.current = null
+        currentChatInteractionIdRef.current = null
+      } else {
+        setLoading(false)
+        setStreamingContent('')
+        const preservedMetadata = preservedLessonMetadataRef.current
+        refreshMessages()
+        if (preservedMetadata?.retrievedHistory || preservedMetadata?.systemPrompt) {
+          setTimeout(() => {
+            setInteractions((prev) =>
+              prev.map((i) => {
+                if (i.id !== interactionId) return i
+                const need =
+                  (!i.metadata.retrievedHistory && preservedMetadata.retrievedHistory) ||
+                  (!i.metadata.systemPrompt && preservedMetadata.systemPrompt)
+                if (!need) return i
+                return {
+                  ...i,
+                  metadata: {
+                    ...i.metadata,
+                    retrievedHistory: i.metadata.retrievedHistory ?? preservedMetadata.retrievedHistory,
+                    systemPrompt: i.metadata.systemPrompt ?? preservedMetadata.systemPrompt,
+                  },
+                }
+              })
+            )
+          }, 200)
+        }
+        preservedLessonMetadataRef.current = null
+        currentInteractionIdRef.current = null
+      }
+    })
+
+    source.onerror = () => {
+      source.close()
+      if (streamRef.current === source) streamRef.current = null
+      inFlightRef.current = false
+      if (isChat) {
+        setChatLoading(false)
+        setChatStreamingContent('')
+        currentChatInteractionIdRef.current = null
+      } else {
+        setLoading(false)
+        setStreamingContent('')
+        currentInteractionIdRef.current = null
+      }
+    }
+  }
+
+  const handleChatSubmit = () => {
+    const trimmed = chatMessage.trim()
+    if (!trimmed || !chatConversationId) return
+    const rid = newRequestId()
+    requestIdRef.current = rid
+    const interactionId = newRequestId()
+    const userMessage: Message = {
+      id: `temp_${Date.now()}`,
+      conversation_id: chatConversationId,
+      role: 'user',
+      content: trimmed,
+      seq: chatMessages.length + 1,
+      created_at: new Date().toISOString(),
+    }
+    const newInteraction = {
+      id: interactionId,
+      userMessage,
+      assistantMessage: null as Message | null,
+      metadata: { timestamp: userMessage.created_at },
+      isStreaming: true as const,
+    }
+    runStream(trimmed, chatConversationId, true, interactionId, rid, newInteraction)
+    setChatMessage('')
+  }
+
+  const canSendChat = useMemo(
+    () => chatMessage.trim().length > 0 && !chatLoading && chatConversationId !== null,
+    [chatMessage, chatLoading, chatConversationId]
+  )
+
+  // Fetch session context (tutor agent state) when opening Chat Options
+  useEffect(() => {
+    if (!showOptions || !conversationId) return
+    setAgentContextLoading(true)
+    axiosInstance
+      .get(`/guru/learning/${conversationId}/context`)
+      .then((res) => setAgentContext((res.data ?? {}) as Record<string, unknown>))
+      .catch((e) => {
+        console.error('Failed to load agent context', e)
+        setAgentContext(null)
+      })
+      .finally(() => setAgentContextLoading(false))
+  }, [showOptions, conversationId])
+
+  // Chat sidebar: interactions + current streaming
+  const displayChatInteractions = useMemo(() => {
+    const result = [...chatInteractions]
+    const streamRefId = currentChatInteractionIdRef.current
+    if (chatStreamingContent && streamRefId && result.length > 0 && result[result.length - 1].id === streamRefId) {
+      const last = result.length - 1
+      result[last] = {
+        ...result[last],
+        assistantMessage: {
+          id: '__streaming__',
+          conversation_id: chatConversationId || '',
+          role: 'assistant',
+          content: chatStreamingContent,
+          seq: result[last].userMessage.seq + 1,
+          created_at: new Date().toISOString(),
+        },
+        isStreaming: true,
+      }
+    }
     return result
-  }, [interactions, streamingContent, conversationId])
+  }, [chatInteractions, chatStreamingContent, chatConversationId])
 
   const selectedInteraction = useMemo(() => {
     if (!selectedInteractionId) return null
-    return displayInteractions.find((i) => i.id === selectedInteractionId) || null
-  }, [selectedInteractionId, displayInteractions])
+    return displayChatInteractions.find((i) => i.id === selectedInteractionId) ?? null
+  }, [selectedInteractionId, displayChatInteractions])
 
   return (
     <div className="h-[calc(100vh-120px)] w-full">
       <div className="flex h-full flex-col rounded-lg border-2 border-blue-300 bg-white shadow-lg">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b-2 border-blue-200 bg-blue-50 px-4 py-3">
-          <div>
-            <div className="text-lg font-bold text-blue-900">🎓 Learning Session</div>
-            <div className="text-sm text-blue-700">
-              {conversationId ? `Conversation: ${conversationId.slice(0, 8)}...` : 'No conversation'}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowOptions(true)}
-              className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-            >
-              Chat Options
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/courses')}
-              className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-            >
-              Back to Courses
-            </button>
-          </div>
-        </div>
-
-        {/* Message History */}
-        <div ref={historyContainerRef} className="min-h-0 flex-1 overflow-auto px-4 py-4">
-          {!conversationId ? (
-            <div className="text-sm text-gray-500">Loading conversation...</div>
-          ) : displayInteractions.length === 0 ? (
-            <div className="text-sm text-gray-500">(no messages yet)</div>
-          ) : (
-            <div className="space-y-4">
-              {displayInteractions.map((interaction) => {
-                const isStreaming = interaction.isStreaming
-                return (
-                  <div
-                    key={interaction.id}
-                    className="rounded-lg border-2 border-gray-200 bg-white shadow-sm"
-                  >
-                    {/* User Message Card */}
-                    <div className="rounded-t-lg border-b border-gray-200 bg-blue-50 p-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="mb-1 flex items-center gap-2">
-                            <span className="text-xs font-semibold uppercase tracking-wide text-blue-700">You</span>
-                            <span className="text-xs text-gray-500">
-                              {new Date(interaction.metadata.timestamp).toLocaleTimeString()}
-                            </span>
-                          </div>
-                          <div className="text-sm text-gray-900">{interaction.userMessage.content}</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Assistant Message Card */}
-                    {interaction.assistantMessage && (
-                      <div className="p-3">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="mb-1 flex items-center gap-2">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Tutor</span>
-                              {isStreaming && (
-                                <span className="text-xs text-gray-400">Streaming...</span>
-                              )}
-                            </div>
-                            <div className="whitespace-pre-wrap text-sm text-gray-900">
-                              {interaction.assistantMessage.content}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedInteractionId(interaction.id)}
-                            className="ml-2 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-                          >
-                            Options
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-              <div ref={historyEndRef} />
-            </div>
-          )}
-        </div>
-
-        {/* Composer */}
-        <div className="border-t border-gray-200 px-4 py-3">
-          <div className="flex gap-2">
-            <textarea
-              className="min-h-[80px] flex-1 resize-none rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  if (canSend) handleSubmit()
-                }
-              }}
-              placeholder="Ask your tutor a question..."
+        <LearningSessionHeader
+          learningContext={learningContext}
+          onShowAgentState={() => setShowOptions(true)}
+          onShowModuleProgress={() => setShowModuleProgress(true)}
+          onBackToCourses={() => navigate('/courses')}
+        />
+        <div className="flex min-h-0 flex-1">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col border-r border-gray-200">
+            <LessonContent
+              learningContext={learningContext}
+              conversationId={conversationId}
+              lessonInteractions={interactions}
+              streamingContent={streamingContent}
+              isStreaming={loading}
+              contentEndRef={lessonContentEndRef}
+              sessionId={sessionId}
+              onCompleteObjective={handleCompleteObjective}
+              completeLoading={completeLoading}
             />
-            <button
-              onClick={handleSubmit}
-              disabled={!canSend}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
-            >
-              {loading ? 'Sending...' : 'Send'}
-            </button>
-          </div>
+          </main>
+          <ChatSidebar
+            chatConversationId={chatConversationId}
+            displayInteractions={displayChatInteractions}
+            containerRef={chatHistoryContainerRef}
+            endRef={chatHistoryEndRef}
+            onSelectInteraction={setSelectedInteractionId}
+            chatMessage={chatMessage}
+            onChatMessageChange={setChatMessage}
+            canSendChat={canSendChat}
+            chatSending={chatLoading}
+            onChatSubmit={handleChatSubmit}
+          />
         </div>
       </div>
-
-      {/* Interaction Options Modal */}
-      {selectedInteraction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" onClick={() => setSelectedInteractionId(null)}>
-          <div className="w-full max-w-3xl rounded-lg border border-gray-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Interaction Options</h2>
-              <button
-                type="button"
-                onClick={() => setSelectedInteractionId(null)}
-                className="rounded-md border border-gray-300 bg-white px-3 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-semibold text-gray-700">Interaction ID</label>
-                <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-2 font-mono text-xs text-gray-900">
-                  {selectedInteraction.id}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-semibold text-gray-700">Timestamp</label>
-                <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-2 text-sm text-gray-900">
-                  {new Date(selectedInteraction.metadata.timestamp).toLocaleString()}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-semibold text-gray-700">User Message</label>
-                <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-900">
-                  {selectedInteraction.userMessage.content}
-                </div>
-              </div>
-
-              {selectedInteraction.assistantMessage && (
-                <div>
-                  <label className="text-sm font-semibold text-gray-700">Assistant Response</label>
-                  <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-900 whitespace-pre-wrap">
-                    {selectedInteraction.assistantMessage.content}
-                  </div>
-                </div>
-              )}
-
-              {selectedInteraction.metadata.retrievedHistory && (
-                <div>
-                  <label className="text-sm font-semibold text-gray-700">
-                    🔍 Retrieved History (from semantic search)
-                  </label>
-                  <div className="mt-1 max-h-[300px] overflow-auto rounded-md border border-purple-200 bg-purple-50 p-3">
-                    <pre className="whitespace-pre-wrap text-xs text-gray-700">
-                      {selectedInteraction.metadata.retrievedHistory}
-                    </pre>
-                  </div>
-                </div>
-              )}
-
-              {selectedInteraction.metadata.systemPrompt && (
-                <div>
-                  <label className="text-sm font-semibold text-gray-700">System Prompt</label>
-                  <div className="mt-1 max-h-[300px] overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3">
-                    <pre className="whitespace-pre-wrap text-xs text-gray-900">
-                      {selectedInteraction.metadata.systemPrompt}
-                    </pre>
-                  </div>
-                </div>
-              )}
-
-              {!selectedInteraction.metadata.retrievedHistory && !selectedInteraction.metadata.systemPrompt && (
-                <div className="text-sm text-gray-500 italic">
-                  No additional metadata available for this interaction.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Global Chat Options Modal */}
-      {showOptions && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" onClick={() => setShowOptions(false)}>
-          <div className="w-full max-w-2xl rounded-lg border border-gray-200 bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Chat Options</h2>
-              <button
-                type="button"
-                onClick={() => setShowOptions(false)}
-                className="rounded-md border border-gray-300 bg-white px-3 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-semibold text-gray-700">Conversation ID</label>
-                <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-2 font-mono text-xs text-gray-900">
-                  {conversationId || '(none)'}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-semibold text-gray-700">Agent Role</label>
-                <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-2 text-sm text-gray-900">
-                  Tutor (Learning Session)
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-semibold text-gray-700">System Prompt</label>
-                {systemPrompt ? (
-                  <pre className="mt-1 max-h-[400px] overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-xs whitespace-pre-wrap text-gray-900">
-                    {systemPrompt}
-                  </pre>
-                ) : (
-                  <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 p-2 text-sm text-gray-500">
-                    (System prompt will appear here after first message)
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <InteractionOptionsModal
+        interaction={selectedInteraction}
+        onClose={() => setSelectedInteractionId(null)}
+      />
+      <AgentStateModal
+        open={showOptions}
+        onClose={() => setShowOptions(false)}
+        conversationId={conversationId}
+        agentContext={agentContext}
+        agentContextLoading={agentContextLoading}
+        systemPrompt={systemPrompt}
+        chatConversationId={chatConversationId}
+        learningContext={learningContext}
+        lessonInteractions={interactions}
+        chatInteractions={chatInteractions}
+      />
+      <ModuleProgressModal
+        open={showModuleProgress}
+        onClose={() => setShowModuleProgress(false)}
+        learningContext={learningContext}
+      />
     </div>
   )
 }
-
-export default LearningSessionChat

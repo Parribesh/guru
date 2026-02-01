@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { getMe, updateUserPreferences, type UserInfo } from '../../api/auth_api'
+import {
+  getMe,
+  updateUserPreferences,
+  updateUserEmail,
+  updateUserPassword,
+  type UserInfo,
+} from '../../api/auth_api'
 import { getOllamaModels, type OllamaModelItem } from '../../api/ollama_api'
 import { get_user_progress, type UserProgressCourse } from '../../api/progress_api'
 
@@ -12,6 +18,21 @@ export function ProfilePage() {
   const [ollamaModelsError, setOllamaModelsError] = useState<string | null>(null)
   const [savingModel, setSavingModel] = useState(false)
   const [progress, setProgress] = useState<UserProgressCourse[]>([])
+
+  const [showEmailForm, setShowEmailForm] = useState(false)
+  const [emailForm, setEmailForm] = useState({ email: '', password: '' })
+  const [emailLoading, setEmailLoading] = useState(false)
+  const [emailError, setEmailError] = useState<string | null>(null)
+
+  const [showPasswordForm, setShowPasswordForm] = useState(false)
+  const [passwordForm, setPasswordForm] = useState({
+    current_password: '',
+    new_password: '',
+    confirm_new_password: '',
+  })
+  const [passwordLoading, setPasswordLoading] = useState(false)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [passwordSuccess, setPasswordSuccess] = useState(false)
 
   useEffect(() => {
     getMe()
@@ -59,6 +80,55 @@ export function ProfilePage() {
     [user]
   )
 
+  const onSubmitEmail = useCallback(async () => {
+    setEmailError(null)
+    if (!emailForm.email.trim() || !emailForm.password) {
+      setEmailError('Enter new email and current password')
+      return
+    }
+    setEmailLoading(true)
+    try {
+      const res = await updateUserEmail({ email: emailForm.email.trim(), password: emailForm.password })
+      setUser((u) => (u ? { ...u, email: res.email } : u))
+      setEmailForm({ email: '', password: '' })
+      setShowEmailForm(false)
+    } catch (e: unknown) {
+      const msg = e && typeof e === 'object' && 'response' in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : 'Failed to update email'
+      setEmailError(typeof msg === 'string' ? msg : 'Failed to update email')
+    } finally {
+      setEmailLoading(false)
+    }
+  }, [emailForm])
+
+  const onSubmitPassword = useCallback(async () => {
+    setPasswordError(null)
+    setPasswordSuccess(false)
+    if (!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_new_password) {
+      setPasswordError('Fill all password fields')
+      return
+    }
+    if (passwordForm.new_password !== passwordForm.confirm_new_password) {
+      setPasswordError('New password and confirmation do not match')
+      return
+    }
+    setPasswordLoading(true)
+    try {
+      await updateUserPassword(passwordForm)
+      setPasswordForm({ current_password: '', new_password: '', confirm_new_password: '' })
+      setShowPasswordForm(false)
+      setPasswordSuccess(true)
+    } catch (e: unknown) {
+      const msg = e && typeof e === 'object' && 'response' in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : 'Failed to update password'
+      setPasswordError(typeof msg === 'string' ? msg : 'Failed to update password')
+    } finally {
+      setPasswordLoading(false)
+    }
+  }, [passwordForm])
+
   if (loading) {
     return (
       <div className="mx-auto max-w-2xl px-4 py-12">
@@ -92,12 +162,130 @@ export function ProfilePage() {
           <div>
             <label className="block text-sm font-medium text-slate-500">Email</label>
             <p className="mt-1 text-slate-900">{user.email}</p>
+            {!showEmailForm ? (
+              <button
+                type="button"
+                onClick={() => setShowEmailForm(true)}
+                className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              >
+                Change email
+              </button>
+            ) : (
+              <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+                <div>
+                  <label htmlFor="new-email" className="block text-xs font-medium text-slate-600">New email</label>
+                  <input
+                    id="new-email"
+                    type="email"
+                    value={emailForm.email}
+                    onChange={(e) => setEmailForm((f) => ({ ...f, email: e.target.value }))}
+                    placeholder="new@example.com"
+                    className="mt-1 block w-full max-w-sm rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="email-password" className="block text-xs font-medium text-slate-600">Current password</label>
+                  <input
+                    id="email-password"
+                    type="password"
+                    value={emailForm.password}
+                    onChange={(e) => setEmailForm((f) => ({ ...f, password: e.target.value }))}
+                    className="mt-1 block w-full max-w-sm rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                {emailError && <p className="text-sm text-red-600">{emailError}</p>}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={onSubmitEmail}
+                    disabled={emailLoading}
+                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-60"
+                  >
+                    {emailLoading ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowEmailForm(false); setEmailError(null); setEmailForm({ email: '', password: '' }) }}
+                    disabled={emailLoading}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-500">Password</label>
+            <p className="mt-0.5 text-xs text-slate-400">Change your account password.</p>
+            {!showPasswordForm ? (
+              <button
+                type="button"
+                onClick={() => { setShowPasswordForm(true); setPasswordError(null); setPasswordSuccess(false) }}
+                className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              >
+                Change password
+              </button>
+            ) : (
+              <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+                <div>
+                  <label htmlFor="current-password" className="block text-xs font-medium text-slate-600">Current password</label>
+                  <input
+                    id="current-password"
+                    type="password"
+                    value={passwordForm.current_password}
+                    onChange={(e) => setPasswordForm((f) => ({ ...f, current_password: e.target.value }))}
+                    className="mt-1 block w-full max-w-sm rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="new-password" className="block text-xs font-medium text-slate-600">New password</label>
+                  <input
+                    id="new-password"
+                    type="password"
+                    value={passwordForm.new_password}
+                    onChange={(e) => setPasswordForm((f) => ({ ...f, new_password: e.target.value }))}
+                    className="mt-1 block w-full max-w-sm rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="confirm-password" className="block text-xs font-medium text-slate-600">Confirm new password</label>
+                  <input
+                    id="confirm-password"
+                    type="password"
+                    value={passwordForm.confirm_new_password}
+                    onChange={(e) => setPasswordForm((f) => ({ ...f, confirm_new_password: e.target.value }))}
+                    className="mt-1 block w-full max-w-sm rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                {passwordError && <p className="text-sm text-red-600">{passwordError}</p>}
+                {passwordSuccess && <p className="text-sm text-green-600">Password updated.</p>}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={onSubmitPassword}
+                    disabled={passwordLoading}
+                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-60"
+                  >
+                    {passwordLoading ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowPasswordForm(false); setPasswordError(null); setPasswordForm({ current_password: '', new_password: '', confirm_new_password: '' }) }}
+                    disabled={passwordLoading}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <div>
             <label htmlFor="ollama-model" className="block text-sm font-medium text-slate-500">
               Ollama model
             </label>
-            <p className="mt-0.5 text-xs text-slate-400">Used for syllabus and inference.</p>
+            <p className="mt-0.5 text-xs text-slate-400">Used for syllabus, tutor, and chat agents.</p>
             {ollamaModelsError ? (
               <p className="mt-1 text-sm text-amber-600">{ollamaModelsError}</p>
             ) : (

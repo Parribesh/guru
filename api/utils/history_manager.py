@@ -2,7 +2,7 @@
 History management utilities for storing and retrieving conversation exchanges.
 
 Provides helper functions to:
-- Store exchanges when messages are saved
+- Store exchanges when messages are saved (chat or tutor store)
 - Sync DB messages with vector store
 """
 
@@ -10,51 +10,97 @@ from typing import Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 from api.models.models import Message
-from api.utils.history_store import get_history_store, ConversationExchange
+from agents.chat_agent.history_store import ConversationExchange, get_history_store
+from agents.tutor_agent.history_store import TutorExchange, get_tutor_history_store
+
+
+def store_tutor_exchange_to_chat_history(
+    chat_conversation_id: str,
+    user_content: str,
+    assistant_content: str,
+) -> None:
+    """
+    Store a tutor (lesson) exchange in the chat agent's history store so the chat
+    agent has lesson context when answering Q&A. Stored with agent_name="tutor".
+    """
+    try:
+        store = get_history_store()
+        seq = int(datetime.utcnow().timestamp() * 1000)
+        exchange_id = f"tutor_{chat_conversation_id}_{seq}"
+        exchange = ConversationExchange(
+            exchange_id=exchange_id,
+            conversation_id=chat_conversation_id,
+            user_message=user_content,
+            assistant_message=assistant_content,
+            seq=seq,
+            created_at=datetime.utcnow().isoformat(),
+            agent_name="tutor",
+        )
+        store.store_exchange(exchange)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to store tutor exchange to chat history: %s", e)
 
 
 def store_exchange_from_messages(
     conversation_id: str,
     user_message_id: str,
     assistant_message_id: str,
-    db: Session
+    db: Session,
+    history_store_kind: str = "chat",
 ) -> None:
     """
-    Store a conversation exchange in the history vector store.
-    
+    Store a conversation exchange in the appropriate history vector store.
+
     Called after both user and assistant messages are saved to DB.
-    
+
     Args:
         conversation_id: Conversation ID
         user_message_id: ID of the user message
         assistant_message_id: ID of the assistant message
         db: Database session
+        history_store_kind: "chat" (conversation_history) or "tutor" (tutor_lesson_history)
     """
     try:
-        # Fetch both messages
         user_msg = db.query(Message).filter(Message.id == user_message_id).first()
         assistant_msg = db.query(Message).filter(Message.id == assistant_message_id).first()
-        
+
         if not user_msg or not assistant_msg:
-            return  # Messages not found, skip
-        
-        # Create exchange
-        exchange = ConversationExchange(
-            exchange_id=f"{user_message_id}_{assistant_message_id}",  # Composite ID
-            conversation_id=conversation_id,
-            user_message=user_msg.content,
-            assistant_message=assistant_msg.content,
-            seq=user_msg.seq,  # Use user message seq
-            created_at=user_msg.created_at.isoformat() if user_msg.created_at else datetime.utcnow().isoformat()
+            return
+
+        created_at = (
+            user_msg.created_at.isoformat()
+            if user_msg.created_at
+            else datetime.utcnow().isoformat()
         )
-        
-        # Store in vector store
-        history_store = get_history_store()
-        history_store.store_exchange(exchange)
+        seq = user_msg.seq
+        exchange_id = f"{user_message_id}_{assistant_message_id}"
+
+        if history_store_kind == "tutor":
+            exchange = TutorExchange(
+                exchange_id=exchange_id,
+                conversation_id=conversation_id,
+                user_message=user_msg.content,
+                assistant_message=assistant_msg.content,
+                seq=seq,
+                created_at=created_at,
+            )
+            store = get_tutor_history_store()
+        else:
+            exchange = ConversationExchange(
+                exchange_id=exchange_id,
+                conversation_id=conversation_id,
+                user_message=user_msg.content,
+                assistant_message=assistant_msg.content,
+                seq=seq,
+                created_at=created_at,
+            )
+            store = get_history_store()
+
+        store.store_exchange(exchange)
     except Exception as e:
-        # Log but don't fail - history storage is optional
         import logging
-        logging.getLogger(__name__).warning(f"Failed to store exchange in history: {e}")
+        logging.getLogger(__name__).warning("Failed to store exchange in history: %s", e)
 
 
 def sync_conversation_history(

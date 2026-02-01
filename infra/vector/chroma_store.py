@@ -78,9 +78,18 @@ class ChromaStore(VectorStore):
         # Chroma expects `documents=` for texts.
         col.add(ids=ids, documents=texts, metadatas=metadatas)
 
-    def query(self, query: str, k: int) -> List[Dict[str, Any]]:
+    def query(
+        self,
+        query: str,
+        k: int,
+        where: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Query by text; optional where filters by metadata (e.g. conversation_id)."""
         col = self._get_collection()
-        res = col.query(query_texts=[query], n_results=k)
+        kwargs: Dict[str, Any] = {"query_texts": [query], "n_results": k}
+        if where is not None:
+            kwargs["where"] = where
+        res = col.query(**kwargs)
 
         ids = (res.get("ids") or [[]])[0]
         docs = (res.get("documents") or [[]])[0]

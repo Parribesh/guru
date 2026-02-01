@@ -75,3 +75,9 @@ class SendMessageResponse(BaseModel):
     assistant_content: str
     assistant_seq: int
     created_at: str  # ISO format of assistant message
+
+
+class SubmitTestRequest(BaseModel):
+    """Body for POST /guru/sessions/{session_id}/submit-test."""
+    score: float  # 0.0 .. 1.0 or 0-100 depending on convention
+    passed: bool

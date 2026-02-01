@@ -35,7 +35,7 @@ System prompts are now generated in **compressed mode** by default:
 
 ### 3. Token Budget Management
 
-New utility module: `api/utils/token_budget.py`
+Token utilities live in the agent library: `agents/core/token_utils.py`
 
 - `estimate_tokens()`: Approximate token counting (~1.33 tokens/word)
 - `truncate_text()`: Smart text truncation preserving word boundaries
@@ -110,7 +110,7 @@ agent.state.metadata["max_tokens"] = 200  # Custom limit
 To verify token counts, you can use the token budget utilities:
 
 ```python
-from api.utils.token_budget import estimate_tokens, build_constrained_prompt
+from agents.core.token_utils import estimate_tokens, build_constrained_prompt
 
 # Estimate tokens
 tokens = estimate_tokens("Your text here")

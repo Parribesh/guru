@@ -2,6 +2,7 @@
 Course management endpoints.
 """
 
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -13,16 +14,40 @@ from api.schemas.course_schemas import (
     CreateCourseRequest,
     SyllabusDraftResponse,
     ConfirmSyllabusResponse,
+    ResetSyllabusResponse,
     CourseModulesResponse,
     ModuleResponse,
 )
 from api.schemas.user_schemas import User
 from api.utils.auth import get_current_user
-from api.utils.common import get_db_user_id, iso_format
+from api.utils.common import get_db_user_id, iso_format, next_objective_index
 from datetime import datetime
 from uuid import uuid4
 
 course_routes = APIRouter()
+
+
+def _module_response(m: Module, progress: Optional[ModuleProgress]) -> ModuleResponse:
+    """Build ModuleResponse with progression fields."""
+    objectives = m.objectives or []
+    completed = list(progress.completed_objectives or []) if progress else []
+    next_idx = None
+    if not (progress and progress.passed) and objectives:
+        next_idx = next_objective_index(completed, len(objectives))
+    return ModuleResponse(
+        id=m.id,
+        course_id=m.course_id,
+        title=m.title,
+        order_index=m.order_index,
+        objectives=objectives,
+        estimated_minutes=m.estimated_minutes,
+        created_at=iso_format(m.created_at),
+        passed=bool(progress.passed) if progress else False,
+        best_score=float(progress.best_score) if progress else 0.0,
+        attempts_count=int(progress.attempts_count) if progress else 0,
+        completed_objectives=[int(x) for x in completed if isinstance(x, (int, float))],
+        next_objective_index=next_idx,
+    )
 
 
 @course_routes.get("/courses", response_model=CourseListResponse)
@@ -125,6 +150,7 @@ async def confirm_syllabus(
                 attempts_count=0,
                 passed=False,
                 updated_at=datetime.utcnow(),
+                completed_objectives=[],
             )
         )
 
@@ -132,6 +158,34 @@ async def confirm_syllabus(
     db.add(course)
     db.commit()
     return ConfirmSyllabusResponse(course_id=course_id, module_ids=module_ids)
+
+
+@course_routes.post("/courses/{course_id}/syllabus/reset", response_model=ResetSyllabusResponse)
+async def reset_syllabus(
+    course_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> ResetSyllabusResponse:
+    """
+    Reset a course's syllabus: unconfirm, remove modules and their progress, clear draft.
+    Allowed only for the course owner. Use to allow rerunning syllabus generation.
+    """
+    assert current_user is not None
+    user_id = get_db_user_id(current_user.email, db)
+    course = db.query(Course).filter(Course.id == course_id, Course.user_id == user_id).first()
+    if course is None:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    modules = db.query(Module).filter(Module.course_id == course_id).all()
+    module_ids = [m.id for m in modules]
+    if module_ids:
+        db.query(ModuleProgress).filter(ModuleProgress.module_id.in_(module_ids)).delete(synchronize_session=False)
+        db.query(Module).filter(Module.course_id == course_id).delete(synchronize_session=False)
+    course.syllabus_confirmed = False
+    course.syllabus_draft = {"modules": []}
+    db.add(course)
+    db.commit()
+    return ResetSyllabusResponse(course_id=course_id, reset=True)
 
 
 @course_routes.get("/courses/{course_id}", response_model=CourseModulesResponse)
@@ -158,18 +212,7 @@ async def get_course(
             created_at=iso_format(course.created_at),
         ),
         modules=[
-            ModuleResponse(
-                id=m.id,
-                course_id=m.course_id,
-                title=m.title,
-                order_index=m.order_index,
-                objectives=m.objectives or [],
-                estimated_minutes=m.estimated_minutes,
-                created_at=iso_format(m.created_at),
-                passed=bool(prog_by_mid.get(m.id).passed) if prog_by_mid.get(m.id) else False,
-                best_score=float(prog_by_mid.get(m.id).best_score) if prog_by_mid.get(m.id) else 0.0,
-                attempts_count=int(prog_by_mid.get(m.id).attempts_count) if prog_by_mid.get(m.id) else 0,
-            )
+            _module_response(m, prog_by_mid.get(m.id))
             for m in modules
         ],
     )

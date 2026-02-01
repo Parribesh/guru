@@ -1,7 +1,7 @@
-"""Unit tests for token_budget utils."""
+"""Unit tests for agent token_utils (agents.core.token_utils)."""
 import pytest
 
-from api.utils.token_budget import (
+from agents.core.token_utils import (
     estimate_tokens,
     truncate_text,
     compress_system_prompt,

@@ -5,10 +5,11 @@ Stores conversation history in a vector store and retrieves relevant history
 based on semantic similarity to the current query.
 """
 
-from typing import List, Tuple, Optional
-from agents.core.memory import Memory
-from api.utils.history_store import get_history_store
 from datetime import datetime
+from typing import List, Tuple, Optional
+
+from agents.core.memory import Memory
+from agents.chat_agent.history_store import ConversationExchange, get_history_store
 
 
 class VectorMemory(Memory):
@@ -90,8 +91,6 @@ class VectorMemory(Memory):
                 # Fallback: use timestamp-based ID
                 exchange_id = f"{self.conversation_id}_{datetime.utcnow().isoformat()}"
             
-            # Create and store exchange
-            from api.utils.history_store import ConversationExchange
             exchange = ConversationExchange(
                 exchange_id=exchange_id,
                 conversation_id=self.conversation_id,

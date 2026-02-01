@@ -1,23 +1,33 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Union, AsyncIterator
 
+import logging
+
 from agents.core.agent_state import AgentState
 from agents.core.tool import Tool
 from agents.core.memory import Memory
-from logging import getLogger
-from api.utils.logger import configure_logging
 
-logger = configure_logging()
+logger = logging.getLogger(__name__)
 
 class BaseAgent(ABC):
     """
     Defines the lifecycle and contract for all agents.
+    system_prompt: optional default set at init; can be overridden per run via state.metadata["system_prompt"].
     """
-    def __init__(self, *, name: str, llm: Any, tools: List[Tool], memory: Memory):
+    def __init__(
+        self,
+        *,
+        name: str,
+        llm: Any,
+        tools: List[Tool],
+        memory: Memory,
+        system_prompt: str = "",
+    ):
         self.name = name
         self.llm = llm
         self.tools = tools
         self.memory = memory
+        self.system_prompt = system_prompt or ""
         self.state = AgentState()
 
     #-----Public API-----

@@ -29,3 +29,23 @@ export const updateUserPreferences = async (preferences: Record<string, unknown>
   const response = await axiosInstance.patch('/guru/user/preferences', { preferences })
   return response.data as { preferences: Record<string, unknown> }
 }
+
+export type UpdateEmailRequest = { email: string; password: string }
+export type UpdateEmailResponse = { message: string; email: string }
+
+export const updateUserEmail = async (body: UpdateEmailRequest): Promise<UpdateEmailResponse> => {
+  const response = await axiosInstance.patch('/guru/user/email', body)
+  return response.data as UpdateEmailResponse
+}
+
+export type UpdatePasswordRequest = {
+  current_password: string
+  new_password: string
+  confirm_new_password: string
+}
+export type UpdatePasswordResponse = { message: string }
+
+export const updateUserPassword = async (body: UpdatePasswordRequest): Promise<UpdatePasswordResponse> => {
+  const response = await axiosInstance.patch('/guru/user/password', body)
+  return response.data as UpdatePasswordResponse
+}

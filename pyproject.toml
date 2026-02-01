@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "langgraph",
     "fastapi",
-    "pydantic",
+    "pydantic[email]",
     "uvicorn",
     "sqlalchemy",
     "python-jose",

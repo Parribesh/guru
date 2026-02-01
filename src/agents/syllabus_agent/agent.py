@@ -63,8 +63,8 @@ class SyllabusAgent(BaseAgent):
             llm=llm,
             tools=tools or [],
             memory=memory or _no_memory(),
+            system_prompt=system_prompt if system_prompt is not None else SYLLABUS_AGENT_SYSTEM_PROMPT,
         )
-        self.system_prompt = system_prompt if system_prompt is not None else SYLLABUS_AGENT_SYSTEM_PROMPT
 
     def plan(self, input: str) -> Any:
         """Parse input JSON into plan (course_title, subject, goals)."""

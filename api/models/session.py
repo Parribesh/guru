@@ -45,9 +45,11 @@ class Session(Base):
     status = Column(SQLEnum(SessionStatus), default=SessionStatus.ACTIVE, nullable=False, index=True)
     
     # Related entities
-    conversation_id = Column(String, ForeignKey("conversations.id"), index=True, nullable=False)
+    conversation_id = Column(String, ForeignKey("conversations.id"), index=True, nullable=False)  # lesson (tutor)
+    chat_conversation_id = Column(String, ForeignKey("conversations.id"), nullable=True)  # Q&A (chat agent); learning only
     module_id = Column(String, ForeignKey("modules.id"), nullable=True)
     course_id = Column(String, ForeignKey("courses.id"), nullable=True)
+    objective_index = Column(Integer, nullable=True)  # For learning sessions: which objective (0-based)
     attempt_id = Column(String, nullable=True)  # For test sessions, links to ModuleTestAttempt
     
     # Timestamps

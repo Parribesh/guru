@@ -23,6 +23,13 @@ def get_db_user_id(email: str, db: Session) -> int:
     return int(u.id)
 
 
+def ollama_model_for_user(db: Session, user_id: int) -> str:
+    """Get user's preferred Ollama model from profile preferences."""
+    user = db.query(DbUser).filter(DbUser.id == user_id).first()
+    prefs = user.preferences if user and isinstance(user.preferences, dict) else {}
+    return prefs.get("ollama_model") or "qwen:latest"
+
+
 def display_name(current_user: User) -> str:
     """Get display name from user preferences or email."""
     prefs = current_user.preferences or {}
@@ -122,4 +129,19 @@ def syllabus_outline(course_id: str, db: Session) -> str:
         return "(syllabus not confirmed yet)"
     lines = [f"{m.order_index}. {m.title}" for m in modules[:15]]
     return "\n".join(lines)
+
+
+def next_objective_index(
+    completed_objectives: list | None,
+    num_objectives: int,
+) -> int | None:
+    """
+    Return the next objective index (0-based) to learn, or None if all are completed.
+    completed_objectives: list of completed indices (from ModuleProgress.completed_objectives).
+    """
+    done = set(int(x) for x in (completed_objectives or []) if isinstance(x, (int, float)))
+    for i in range(num_objectives):
+        if i not in done:
+            return i
+    return None
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session as DBSession
 from enum import Enum
 
 from api.models.models import (
+    User as DbUser,
     Conversation,
     Module,
     Course,
@@ -18,7 +19,7 @@ from api.models.models import (
 )
 from api.models.session import Session, SessionType, SessionStatus
 from api.utils.common import get_db_user_id, display_name, syllabus_outline
-from api.utils.prompt_builder import build_tutor_system_prompt, build_test_system_prompt
+from api.prompt_builders import build_tutor_system_prompt, build_test_system_prompt
 from api.bootstrap import build_registry
 from api.utils.logger import configure_logging
 
@@ -52,12 +53,14 @@ class SessionService:
         conversation_id: str,
         module_id: Optional[str] = None,
         course_id: Optional[str] = None,
+        objective_index: Optional[int] = None,
+        chat_conversation_id: Optional[str] = None,
         agent_name: Optional[str] = None,
         agent_metadata: Optional[Dict[str, Any]] = None,
         session_state: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Session:
-        """Create a new session."""
+        """Create a new session. For learning: conversation_id=lesson, chat_conversation_id=Q&A."""
         session_id = str(uuid4())
         
         session = Session(
@@ -66,8 +69,10 @@ class SessionService:
             session_type=session_type,
             status=SessionStatus.ACTIVE,
             conversation_id=conversation_id,
+            chat_conversation_id=chat_conversation_id,
             module_id=module_id,
             course_id=course_id,
+            objective_index=objective_index,
             agent_name=agent_name or "chat",
             agent_metadata=agent_metadata or {},
             session_state=session_state or {},
@@ -138,6 +143,9 @@ class SessionService:
     
     def get_session_context(self, session: Session) -> Dict[str, Any]:
         """Get full context for a session including related entities."""
+        user = self.db.query(DbUser).filter(DbUser.id == session.user_id).first()
+        prefs = (user.preferences or {}) if user else {}
+        model = prefs.get("ollama_model") or "qwen:latest"
         context = {
             "session": {
                 "id": session.id,
@@ -146,10 +154,13 @@ class SessionService:
                 "started_at": session.started_at.isoformat() if session.started_at else None,
                 "ended_at": session.ended_at.isoformat() if session.ended_at else None,
                 "last_activity_at": session.last_activity_at.isoformat() if session.last_activity_at else None,
+                "conversation_id": session.conversation_id,
+                "chat_conversation_id": getattr(session, "chat_conversation_id", None),
             },
             "agent": {
                 "name": session.agent_name,
                 "metadata": session.agent_metadata or {},
+                "model": model,
             },
             "state": session.session_state or {},
             "session_metadata": session.session_metadata or {},
@@ -159,14 +170,17 @@ class SessionService:
         if session.module_id:
             module = self.db.query(Module).filter(Module.id == session.module_id).first()
             if module:
+                objectives = module.objectives or []
                 context["module"] = {
                     "id": module.id,
                     "title": module.title,
                     "order_index": module.order_index,
-                    "objectives": module.objectives or [],
+                    "objectives": objectives,
                     "estimated_minutes": module.estimated_minutes,
                 }
-                
+                if session.objective_index is not None and 0 <= session.objective_index < len(objectives):
+                    context["module"]["current_objective_index"] = session.objective_index
+                    context["module"]["current_objective"] = objectives[session.objective_index]
                 # Add progress if available
                 progress = self.db.query(ModuleProgress).filter(
                     ModuleProgress.user_id == session.user_id,
@@ -177,6 +191,7 @@ class SessionService:
                         "best_score": float(progress.best_score),
                         "attempts_count": int(progress.attempts_count),
                         "passed": bool(progress.passed),
+                        "completed_objectives": list(progress.completed_objectives or []),
                     }
         
         # Add course context if available

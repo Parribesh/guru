@@ -6,6 +6,7 @@ import { GuruChat } from './views/guru/GuruChat'
 import { LoginPage } from './views/auth/LoginPage'
 import { getMe } from './api/auth_api'
 import { Courses } from './views/courses/Courses'
+import { CourseSettings } from './views/courses/CourseSettings'
 import LearningSessionChat from './views/learn/LearningSessionChat'
 import { AgentDashboard } from './views/dashboard/AgentDashboard'
 import { ProfilePage } from './views/profile/ProfilePage'
@@ -91,6 +92,16 @@ function App() {
             <Protected>
               <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
                 <Courses />
+              </div>
+            </Protected>
+          }
+        />
+        <Route
+          path="courses/:courseId/settings"
+          element={
+            <Protected>
+              <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+                <CourseSettings />
               </div>
             </Protected>
           }

@@ -41,6 +41,11 @@ class ConfirmSyllabusResponse(BaseModel):
     module_ids: list[str]
 
 
+class ResetSyllabusResponse(BaseModel):
+    course_id: str
+    reset: bool
+
+
 class ModuleResponse(BaseModel):
     id: str
     course_id: str
@@ -52,6 +57,8 @@ class ModuleResponse(BaseModel):
     passed: bool
     best_score: float
     attempts_count: int
+    completed_objectives: list[int] = []  # indices of completed objectives (0-based)
+    next_objective_index: Optional[int] = None  # next to learn, or None if all done / module passed
 
 
 class CourseModulesResponse(BaseModel):

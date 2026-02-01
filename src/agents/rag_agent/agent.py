@@ -31,7 +31,7 @@ class RAGAgent(BaseAgent):
     ):
         # RAG doesn't need an LLM; keep llm=None.
         # RAG also doesn't need its own memory by default; the ChatAgent typically owns conversation memory.
-        super().__init__(name=name, llm=None, tools=tools or [], memory=memory)
+        super().__init__(name=name, llm=None, tools=tools or [], memory=memory, system_prompt="")
         self.rag = RAGService(store=store)
         self.default_k = default_k
 

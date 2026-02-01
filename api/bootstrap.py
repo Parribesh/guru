@@ -1,5 +1,6 @@
 from agents.core.registry import AgentRegistry
 from agents.chat_agent.agent import ChatAgent
+from agents.tutor_agent.agent import TutorAgent
 from agents.rag_agent.agent import RAGAgent
 from agents.syllabus_agent.agent import SyllabusAgent
 
@@ -35,14 +36,9 @@ def build_registry() -> AgentRegistry:
         lambda: SyllabusAgent(name="SyllabusAgent", llm=llm),
     )
 
-    # Role-specific chat agents (same engine, different responsibility/prompts per route).
     registry.register(
         "tutor",
-        lambda: ChatAgent(
-            name="TutorAgent",
-            llm=llm,
-            registry=registry,
-        ),
+        lambda: TutorAgent(name="TutorAgent", llm=llm),
     )
     registry.register(
         "tester",

@@ -114,12 +114,7 @@ def build_chat_graph(
         # Use token budget management if max_tokens is set
         if max_tokens:
             try:
-                import sys
-                from pathlib import Path
-                project_root = Path(__file__).parent.parent.parent.parent
-                if str(project_root) not in sys.path:
-                    sys.path.insert(0, str(project_root))
-                from api.utils.token_budget import estimate_tokens, compress_system_prompt, truncate_text
+                from agents.core.token_utils import estimate_tokens, compress_system_prompt, truncate_text
                 
                 # Calculate available budget
                 query_tokens = estimate_tokens(query)
@@ -133,13 +128,19 @@ def build_chat_graph(
                 # Compress system prompt
                 compressed_system = compress_system_prompt(sys_prompt, system_budget)
                 
-                # Format history (already retrieved by memory, just format it)
+                # Format history (already retrieved by memory; may include (u, a) or (u, a, agent_name))
                 history_text = ""
                 if history:
                     history_parts = []
                     tokens_used = 0
-                    for u, a in history:
-                        pair_text = f"User: {u}\nAssistant: {a}"
+                    for item in history:
+                        u, a = (item[0], item[1]) if len(item) >= 2 else ("", "")
+                        agent_name = item[2] if len(item) >= 3 else None
+                        # Tutor exchanges: use "Tutor:" for tutor response so chat agent distinguishes tutor from its own Assistant role
+                        if agent_name == "tutor":
+                            pair_text = f"[Tutor lesson] User: {u}\nTutor: {a}"
+                        else:
+                            pair_text = f"User: {u}\nAssistant: {a}"
                         pair_tokens = estimate_tokens(pair_text)
                         if tokens_used + pair_tokens <= history_budget:
                             history_parts.append(pair_text)
@@ -152,7 +153,10 @@ def build_chat_graph(
                                 assistant_budget = remaining // 2
                                 truncated_u = truncate_text(u, user_budget)
                                 truncated_a = truncate_text(a, assistant_budget)
-                                history_parts.append(f"User: {truncated_u}\nAssistant: {truncated_a}")
+                                if agent_name == "tutor":
+                                    history_parts.append(f"[Tutor lesson] User: {truncated_u}\nTutor: {truncated_a}")
+                                else:
+                                    history_parts.append(f"User: {truncated_u}\nAssistant: {truncated_a}")
                             break
                     history_text = "\n".join(history_parts)
                 
@@ -192,13 +196,7 @@ def build_chat_graph(
         max_tokens = state.get("max_tokens")
         if max_tokens:
             try:
-                import sys
-                from pathlib import Path
-                # Add project root to path for imports
-                project_root = Path(__file__).parent.parent.parent.parent
-                if str(project_root) not in sys.path:
-                    sys.path.insert(0, str(project_root))
-                from api.utils.token_budget import truncate_text, estimate_tokens
+                from agents.core.token_utils import truncate_text, estimate_tokens
                 # Reserve tokens for context
                 context_tokens = estimate_tokens(context)
                 query_tokens = estimate_tokens(query)
@@ -218,18 +216,25 @@ def build_chat_graph(
                     history_budget = int(sys_and_history_budget * 0.6)
                     truncated_history = []
                     if history:
-                        last_user, last_assistant = history[-1]
+                        last = history[-1]
+                        last_user = last[0] if len(last) >= 1 else ""
+                        last_assistant = last[1] if len(last) >= 2 else ""
+                        agent_name = last[2] if len(last) >= 3 else None
+                        prefix = "Tutor: " if agent_name == "tutor" else ""
                         pair_tokens = estimate_tokens(last_user) + estimate_tokens(last_assistant)
                         if pair_tokens <= history_budget:
-                            truncated_history = [(last_user, last_assistant)]
+                            truncated_history = [(last_user, last_assistant, agent_name)]
                         else:
                             user_budget = history_budget // 2
                             assistant_budget = history_budget // 2
                             truncated_history = [
-                                (truncate_text(last_user, user_budget), truncate_text(last_assistant, assistant_budget))
+                                (truncate_text(last_user, user_budget), truncate_text(last_assistant, assistant_budget), agent_name)
                             ]
                     
-                    history_text = "\n".join([f"User: {u}\nAssistant: {a}" for u, a in truncated_history]) if truncated_history else ""
+                    history_text = "\n".join([
+                        f"[Tutor lesson] User: {h[0]}\nTutor: {h[1]}" if (len(h) >= 3 and h[2] == "tutor") else f"User: {h[0]}\nAssistant: {h[1]}"
+                        for h in truncated_history
+                    ]) if truncated_history else ""
                     
                     parts = [compressed_sys]
                     if context:
@@ -355,12 +360,17 @@ def _extract_doc_paths_and_query(user_input: str) -> tuple[List[str], str]:
 
 
 def _format_history(history: List[Any]) -> str:
+    """Format history for prompt; items may be (u, a) or (u, a, agent_name)."""
     lines: List[str] = []
     for item in history:
-        if isinstance(item, tuple) and len(item) == 2:
-            u, a = item
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            u, a = item[0], item[1]
+            agent_name = item[2] if len(item) >= 3 else None
             if isinstance(u, str) and isinstance(a, str):
-                lines.append(f"User: {u}\nAssistant: {a}")
+                if agent_name == "tutor":
+                    lines.append(f"[Tutor lesson] User: {u}\nTutor: {a}")
+                else:
+                    lines.append(f"User: {u}\nAssistant: {a}")
     return "\n".join(lines)
 
 

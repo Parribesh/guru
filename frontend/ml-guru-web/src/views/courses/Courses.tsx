@@ -428,11 +428,21 @@ export const Courses = () => {
                 <div className="text-lg font-semibold">{courseDetail?.course.title}</div>
                 <div className="text-sm text-gray-500">{courseDetail?.course.subject}</div>
               </div>
-              {!courseDetail?.course.syllabus_confirmed && (
+              <div className="flex items-center gap-2">
+                {selectedCourseId && (
+                  <Link
+                    to={`/courses/${selectedCourseId}/settings`}
+                    className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                  >
+                    Settings
+                  </Link>
+                )}
+                {!courseDetail?.course.syllabus_confirmed && (
                 <button disabled={busy} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold hover:bg-gray-50 disabled:bg-gray-100" onClick={confirmSyllabus} type="button">
                   Confirm syllabus
                 </button>
-              )}
+                )}
+              </div>
             </div>
 
             <div className="mt-4 grid grid-cols-3 gap-3">

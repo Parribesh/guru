@@ -2,29 +2,31 @@
 
 ## 1. App overview
 - **Stack**: FastAPI, SQLAlchemy, LangGraph/agents, Ollama LLM, ChromaDB (optional RAG).
-- **Core flows**: Auth → Courses → Syllabus (draft → confirm, separate endpoints) → Sessions (learning/test/chat only) → Module progression.
+- **Core flows**: Auth → Courses → Syllabus (step-by-step run → draft → confirm) → Sessions (learning/test/chat only) → Module progression. Course settings per course (e.g. rerun syllabus).
 
 ---
 
 ## 2. Data model (critical entities)
 
-- **User**: id, email, hashed_password, preferences.
+- **User**: id, email, hashed_password, preferences (e.g. ollama_model).
 - **Course**: id, user_id, title, subject, goals, syllabus_draft (JSON: `{modules: [...]}`), syllabus_confirmed (bool). No Module rows until confirm.
 - **Module**: id, course_id, title, order_index, objectives (JSON list), estimated_minutes. Created only on syllabus confirm.
-- **ModuleProgress**: id, user_id, module_id, best_score, attempts_count, passed, passed_at, updated_at. One per (user, module); created on confirm.
-- **Session** (api/models/session.py): id, user_id, session_type (learning|test|chat), status (active|paused|completed|cancelled), conversation_id, module_id?, course_id?, agent_name, agent_metadata (e.g. system_prompt), session_state (e.g. progress snapshot), session_metadata, started_at, ended_at, last_activity_at. Syllabus generation does not use Session.
+- **ModuleProgress**: id, user_id, module_id, best_score, attempts_count, passed, passed_at, updated_at, completed_objectives (JSON list of 0-based objective indices). One per (user, module); created on confirm.
+- **Session** (api/models/session.py): id, user_id, session_type (learning|test|chat), status (active|paused|completed|cancelled), conversation_id, module_id?, course_id?, objective_index? (learning: which objective 0-based), agent_name, agent_metadata (e.g. system_prompt), session_state (e.g. progress snapshot), session_metadata, started_at, ended_at, last_activity_at. Syllabus generation does not use Session.
 - **Conversation**: id, user_id, parent_conversation_id?, forked_from_message_id?; holds Message(s).
 - **Message** (api/models/models.py; table `messages`): id, conversation_id, role (user|assistant|system|tool), content, seq, created_at, interaction_metadata (JSON: retrieved_history, system_prompt, etc.). Canonical store for all chat/tutor/test turns; one row per turn.
-- **SyllabusRun**: id, user_id, course_id, status, phase, result (JSON modules), error. Tracks one syllabus generation run.
+- **SyllabusRun**: id, user_id, course_id, status, phase, result (JSON modules), error, state_snapshot (JSON: latest LangGraph state for resume/step). Tracks one syllabus generation run.
 - **SyllabusEvent**: run_id, phase, type, data. Events for that run (persisted for replay/debug).
 
 ---
 
-## 3. Syllabus generation (clean state → new design)
+## 3. Syllabus generation (current)
 
-**Clean state (current)**: SyllabusAgent is a stub in src/agents/syllabus_agent/agent.py. No full-course generation: execute_stream yields phase_start then done with empty modules and empty concepts_by_level. SyllabusService accepts empty modules and completes the run (result = {"modules": []}). ConceptGenerator, DependencyOrdering, and pipeline removed. Integration: POST /guru/courses/{id}/syllabus/run and GET /guru/syllabus/runs/{run_id}/stream still work; run completes with no syllabus.
+**Step-by-step execution**: SyllabusAgent (src/agents/syllabus_agent/agent.py) uses a LangGraph per level. Pipeline: planning → per level (Beginner, Intermediate, Advanced): generate_concepts → validate (concept count) → [add_concepts → validate]* → add_module. State is persisted in SyllabusRun.state_snapshot; SyllabusService.step_run(run_id, user_id) runs one graph node and saves state. Frontend advances with a "Continue" button; one SyllabusBuilderCard shows current step (stage, state, step_prompt, step_output, system_prompt). WebSocket GET /guru/ws/syllabus/runs/{run_id} broadcasts state on each step and on run start so all tabs/views stay in sync. Run ID is stored in sessionStorage per course for resume after navigation.
 
-**New design (to implement)**: Build the course gradually, per module. User is in a module (Beginner / Intermediate / Advanced); path makes the user proficient in **that module only**. When the user completes a concept, we ask the LLM for the **next concept** in order, passing the list of concepts already completed. So the LLM knows current module and completed concepts; it suggests the next one. No single “generate full course at once”; control per module.
+**Concept quality**: Level-specific prompts (beginner/intermediate/advanced), forbidden list of concepts already generated in other modules, 6–10 concepts per module, ordered easy→hard. Post-LLM deduplication in concept_generator and add_concepts. Syllabus generation uses user's preferred Ollama model (user.preferences.ollama_model).
+
+**Rerun / reset**: POST /guru/courses/{id}/syllabus/reset (course owner only) sets syllabus_confirmed=false, deletes Module and ModuleProgress for that course, clears syllabus_draft. DELETE /guru/syllabus/runs/{run_id} removes a run before starting a fresh one. Course settings page (/courses/:courseId/settings) offers "Rerun syllabus generation" (reset if confirmed, delete existing runs for course, start new run, then navigate to course view).
 
 ---
 
@@ -81,10 +83,10 @@
 
 **Session types**: learning, test, chat only. Syllabus generation is separate (see §3).
 
-- **Create** (POST /guru/sessions): Requires session_type (learning|test|chat). Rejects syllabus with 400 and message to use POST /guru/courses/{id}/syllabus/run.  
+- **Create** (POST /guru/sessions): Requires session_type (learning|test|chat). Optional objective_index (learning: omit = next incomplete objective). Rejects syllabus with 400.  
   - Creates Conversation.  
-  - Resolves Module/Course; for learning loads ModuleProgress, builds tutor system prompt via `build_tutor_system_prompt()` (compressed=True), stores in agent_metadata and session_state (module_progress snapshot).  
-  - SessionService.create_session(..., session_type, conversation_id, module_id, course_id, agent_name, agent_metadata, session_state).
+  - For learning + module_id: resolves next objective from ModuleProgress.completed_objectives (or uses objective_index if provided). If all objectives done, returns 400 "Take the module test." Builds tutor prompt for **single** current_objective (concept); stores objective_index and snapshot in session_state.  
+  - SessionService.create_session(..., module_id, course_id, objective_index?, agent_name, agent_metadata, session_state).
 
 - **Stream** (GET /guru/sessions/{id}/stream): SSE. Placeholder loop (keep-alive) for learning/test/chat; real-time updates would be WebSocket/pub-sub later.
 
@@ -94,45 +96,49 @@
 
 ---
 
-## 5. Module progression (how session handles it)
+## 5. Module progression (objective-level)
 
-- **Storage**: ModuleProgress per (user_id, module_id): best_score, attempts_count, passed, passed_at. Created when user confirms syllabus (one row per new module).
+- **Storage**: ModuleProgress per (user_id, module_id): best_score, attempts_count, passed, passed_at, **completed_objectives** (JSON list of 0-based indices). Created on syllabus confirm with completed_objectives=[].
 
-- **Learning session**: On create, tutor system prompt is built with progress_best_score, progress_attempts, progress_passed so the tutor can adapt. Session stores snapshot in session_state.module_progress. Actual update of ModuleProgress (e.g. after practice or assessment) is assumed to happen in assessment/test completion flow (not fully shown in session_service; course get returns progress for UI).
+- **Learning session = one concept**: Each learning session is scoped to **one objective** (concept). POST /guru/sessions?session_type=learning&module_id=X: backend computes next objective index from completed_objectives (or uses objective_index if provided). If all objectives done, returns 400 "Take the module test." Tutor prompt gets current_objective (single string), objectives_completed_count, total_objectives. Session stores objective_index and snapshot in session_state.
 
-- **Test session**: Same session model; attempt_id can link to ModuleTestAttempt. Progress update (best_score, attempts_count, passed) would be done when test is submitted/evaluated (conversation or dedicated endpoint).
+- **Mark objective complete**: POST /guru/sessions/{id}/complete-objective appends session's objective_index to ModuleProgress.completed_objectives. Call when user (or tutor) signals done with this concept.
 
-- **Ordering**: Modules have order_index. Course view returns modules ordered by order_index; progression is linear (module 1 → 2 → …). Frontend/UX can gate “next module” on current module passed.
+- **Module test**: When all objectives in a module are completed, user takes a **test** session (session_type=test, module_id). POST /guru/sessions/{id}/submit-test with body { score, passed } creates ModuleTestAttempt, updates ModuleProgress (best_score, attempts_count, passed, passed_at), ends session.
 
-**Summary**: Session carries module/course context and progress snapshot; persistence of progress is in ModuleProgress and updated by the flow that completes learning/test (session provides context, not the single writer of progress).
+- **Ordering**: Modules have order_index; objectives within a module are ordered by list index. Course GET returns per module: completed_objectives, next_objective_index (None if all done or module passed). Frontend gates “next module” on module passed; next concept from next_objective_index.
+
+**Summary**: One learning session = one objective; progress tracked in completed_objectives; when all objectives done → module test → on pass, next module unlocked.
 
 ---
 
 ## 6. API surface (minimal)
 
-- Auth: POST /auth/register (email, password, confirm_password), /auth/login, /auth/logout, GET /auth/me.  
-- Courses: GET/POST /guru/courses; POST /guru/courses/{id}/syllabus/confirm (draft → Module rows + ModuleProgress); GET /guru/courses/{id} (course + modules + per-module progress).  
-- Syllabus: POST /guru/courses/{id}/syllabus/run (creates SyllabusRun, returns run_id), GET /guru/syllabus/runs/{run_id}/stream (SSE; SyllabusService). No Session.  
-- Sessions: POST /guru/sessions (create learning/test/chat only), POST /guru/sessions/{id}/messages (send message), GET /guru/sessions/{id}/stream (SSE), GET /guru/sessions, GET /guru/sessions/{id}, POST /guru/sessions/{id}/end.  
-- Conversations: under /guru (list, messages, fork).
+- **Auth**: POST /auth/register (email, password, confirm_password), /auth/login, /auth/logout, GET /auth/me.
+- **Courses**: GET/POST /guru/courses; POST /guru/courses/{id}/syllabus/confirm (draft → Module rows + ModuleProgress with completed_objectives=[]); POST /guru/courses/{id}/syllabus/reset (unconfirm, delete modules+progress, clear draft; owner only); GET /guru/courses/{id} (course + modules + per-module progress including completed_objectives, next_objective_index).
+- **Syllabus**: POST /guru/courses/{id}/syllabus/run (creates SyllabusRun, returns run_id); GET /guru/syllabus/runs (?status= optional); GET /guru/syllabus/runs/{run_id} (status + state_snapshot); DELETE /guru/syllabus/runs/{run_id}; POST /guru/syllabus/runs/{run_id}/step (one graph node); GET /guru/syllabus/runs/{run_id}/stream (SSE); WebSocket /guru/ws/syllabus/runs/{run_id}. No Session.
+- **User**: PATCH /guru/user/preferences (e.g. ollama_model); GET /guru/user/progress (courses with module progress).
+- **Ollama**: GET /guru/ollama/models (list available models).
+- **Sessions**: POST /guru/sessions (create learning/test/chat; learning uses next objective or optional objective_index), POST /guru/sessions/{id}/messages (send message), POST /guru/sessions/{id}/complete-objective (mark current concept done), POST /guru/sessions/{id}/submit-test (test result; body: score, passed), GET /guru/sessions/{id}/stream (SSE), GET /guru/sessions, GET /guru/sessions/{id}, POST /guru/sessions/{id}/end.
+- **Conversations**: under /guru (list, messages, fork).
 
 ---
 
 ## 7. Key files
 
-- Syllabus: src/agents/syllabus_agent/agent.py (SyllabusAgent, run_stream); agentic/ (ConceptGenerator, pipeline.generate_syllabus optional, schemas).  
-- Syllabus: api/services/syllabus_service.py (start_run, stream_run). Session: api/services/session_service.py (create, get, update_state, end, get_session_context, stream_session_events).  
-- Routes: api/routes/session_routes.py (create_session, stream_session), api/routes/course_routes.py (confirm_syllabus, get_course with progress).  
-- Prompts: api/utils/prompt_builder.py (tutor, critic, planner; syllabus prompts removed in favor of agentic).  
-- Models: api/models/ (__init__.py exports Message, Conversation, User, Course, Module, ModuleProgress, Session, etc.); api/models/models.py (DB tables); api/models/session.py (Session, SessionType, SessionStatus).
+- **Syllabus agent**: src/agents/syllabus_agent/agent.py (SyllabusAgent, run_one_step); agentic/graph.py (build_syllabus_level_graph, run_one_step); agentic/stages/ (concept_generator, validator, add_concepts); agentic/prompts.py.
+- **Syllabus service**: api/services/syllabus_service.py (start_run, step_run, stream_run, list_runs, delete_run, get_run). Session: api/services/session_service.py (create, get, update_state, end, get_session_context, stream_session_events).
+- **Routes**: api/routes/course_routes.py (list_courses, create_course, confirm_syllabus, reset_syllabus, get_course); api/routes/syllabus_routes.py (start run, list/get/delete runs, step, stream, WebSocket); api/routes/user_routes.py (patch preferences, get progress); api/routes/ollama_routes.py (get models); api/routes/session_routes.py.
+- **Schemas**: api/schemas/ (auth_schemas, chat_schemas, course_schemas, user_schemas, user_progress_schemas, syllabus_run_schemas; __init__.py re-exports). course_schemas includes ResetSyllabusResponse.
+- **Prompts**: api/utils/prompt_builder.py (tutor, critic, planner; syllabus in agentic). **Models**: api/models/ (__init__.py exports Message, Conversation, User, Course, Module, ModuleProgress, Session, SyllabusRun, etc.); api/models/models.py (DB tables, SyllabusRun.state_snapshot); api/models/session.py (Session, SessionType, SessionStatus).
+- **Frontend**: App.tsx (routes: /courses, /courses/:courseId, /courses/:courseId/settings, /learn/:conversationId, /dashboard, /dashboard/syllabus-run/:runId, /profile); views/courses/Courses.tsx (list, detail, syllabus builder with Continue, Settings link), views/courses/CourseSettings.tsx (rerun syllabus); components/SyllabusBuilderCard.tsx; views/dashboard/AgentDashboard.tsx (active syllabus run); views/profile/ProfilePage.tsx (Ollama model, learning progress).
 
 ---
 
 ## 8. Conventions
 
-- Syllabus: current output 3 modules (Beginner, Intermediate, Advanced) from ConceptListByLevel; each has objectives, estimated_minutes.  
-- Syllabus: standalone endpoints and SyllabusService; no Session. Sessions are for learning, test, chat only.  
-- Progress: one ModuleProgress per (user, module); session reads it for context and tutor prompt; progress is updated by assessment/completion flow, not by session stream itself.
+- **Syllabus**: Step-by-step LangGraph (generate_concepts → validate → add_concepts/add_module); 3 modules (Beginner, Intermediate, Advanced); state in SyllabusRun.state_snapshot; WebSocket broadcasts on step; course settings page for rerun. Standalone endpoints and SyllabusService; no Session.
+- **Sessions**: Learning, test, chat only. Progress: one ModuleProgress per (user, module); session reads it for context and tutor prompt; progress is updated by assessment/completion flow, not by session stream itself.
 
 ---
 
@@ -141,9 +147,9 @@
 **Canonical store**: Message table. Every user/assistant/system/tool turn should be persisted as a Message (conversation_id, role, content, seq, created_at, interaction_metadata). Conversation has many Messages; seq orders turns.
 
 **Current layers**  
-1. **DB**: Message rows. Created today in fork (copy messages to new conversation). No dedicated “send message” API that writes user + assistant Message rows for normal chat yet.  
+1. **DB**: Message rows. Created in fork (copy messages to new conversation) and in POST /guru/sessions/{id}/messages (send message: user + assistant Message rows).  
 2. **Utils**: `load_history_pairs(conversation_id, db)` → list of (user_content, assistant_content) from Message; `next_seq(conversation_id, db)`; `latest_system_prompt(conversation_id, db)`.  
-3. **HistoryStore** (api/utils/history_store.py): ChromaDB collection `conversation_history`. Stores ConversationExchange (conversation_id, user_message, assistant_message, seq). `store_exchange(exchange)` embeds user message, stores full exchange in metadata. `retrieve_relevant_history(query, conversation_id, max_tokens, k)` returns (user, assistant) pairs for prompt context.  
+3. **HistoryStore** (agents/chat_agent/history_store.py): ChromaDB collection `conversation_history`. Stores ConversationExchange (conversation_id, user_message, assistant_message, seq). `store_exchange(exchange)` embeds user message, stores full exchange in metadata. `retrieve_relevant_history(query, conversation_id, max_tokens, k)` returns (user, assistant) pairs for prompt context.  
 4. **History manager** (api/utils/history_manager.py): `store_exchange_from_messages(conversation_id, user_message_id, assistant_message_id, db)` reads Message rows, builds exchange, calls HistoryStore.store_exchange. Called by **POST /guru/sessions/{id}/messages** after persisting user + assistant Message rows. `sync_conversation_history(conversation_id, db)` backfills all user/assistant pairs from Message into vector store (e.g. for existing conversations).  
 5. **Agent memory**: ChatAgent uses Memory. (a) **ChatAgentMemory** (memory.py): in-memory list; no persistence. (b) **VectorMemory** (vector_memory.py): load() = retrieve_relevant_history(); save(input, result) = store_exchange() to HistoryStore. Uses agent_state.metadata (_user_message_id, _assistant_message_id, _message_seq) if set. So vector store is written by agent save(); DB Message is not written by agent.  
 6. **Token budget**: `build_constrained_prompt(system, history, query)` truncates history; comment says “will be replaced by semantic retrieval”. When VectorMemory is used, the graph gets history from memory.load() (semantic); build_constrained_prompt may still be used elsewhere.
@@ -163,7 +169,7 @@
 - Returns the **next sequence number** for that conversation.  
 - Implementation: find the Message row with the largest `seq` for this `conversation_id`; return `last.seq + 1`. If there are no messages, return `1`.  
 - Purpose: when you append a new Message (user or assistant), you must give it a `seq` so order is well-defined. `next_seq` tells you “use this number for the next message.”  
-- **Current use**: Defined in api/utils/common.py and imported in session_routes, but **no route calls it yet**. It will be used once we have a “send message” flow that inserts Message rows.
+- **Current use**: Defined in api/utils/common.py; used by POST /guru/sessions/{id}/messages (send message) and by fork when copying messages.
 
 **How conversation history is created today**  
 1. **Conversation row**  

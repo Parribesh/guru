@@ -82,6 +82,8 @@ class ModuleProgress(Base):
     passed = Column(Boolean, default=False, nullable=False)
     passed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Objective-level progression: list of completed objective indices (0-based)
+    completed_objectives = Column(JSON, nullable=True)  # default [] in migration
 
     user = relationship("User", backref="module_progress", foreign_keys=[user_id])
 
