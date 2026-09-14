@@ -171,3 +171,82 @@ class TestCourseRoutes:
         assert response.status_code == 200
         data = response.json()
         assert "course_id" in data or "modules" in data
+
+
+class TestSyllabusRoutes:
+    """Test syllabus run generation routes and model selection."""
+
+    def test_start_syllabus_run_with_custom_model(self, api_client: TestClient, override_get_db):
+        db_gen = override_get_db()
+        db = next(db_gen)
+        try:
+            user = User(
+                email="syllabus_model_test@example.com",
+                hashed_password=get_password_hash("pass"),
+                preferences=None,
+            )
+            db.add(user)
+            db.commit()
+        finally:
+            db.close()
+
+        login = api_client.post(
+            "/auth/login",
+            json={"email": "syllabus_model_test@example.com", "password": "pass"},
+        )
+        assert login.status_code == 200
+        cookies = login.cookies
+
+        # 1. Create course
+        course_resp = api_client.post(
+            "/guru/courses",
+            json={
+                "title": "Quantum Computing",
+                "subject": "Physics",
+                "goals": "Learn qubits",
+            },
+            cookies=cookies,
+        )
+        assert course_resp.status_code == 200
+        course_id = course_resp.json()["course_id"]
+
+        # 2. Start syllabus run with custom provider and model
+        run_resp = api_client.post(
+            f"/guru/courses/{course_id}/syllabus/run",
+            json={
+                "provider": "gemini",
+                "model": "gemini-3.7-flash",
+            },
+            cookies=cookies,
+        )
+        assert run_resp.status_code == 200
+        run_id = run_resp.json()["run_id"]
+        assert run_id is not None
+
+        # 3. Verify get_syllabus_run reflects chosen model and TutorAgent
+        get_resp = api_client.get(f"/guru/syllabus/runs/{run_id}", cookies=cookies)
+        assert get_resp.status_code == 200
+        run_data = get_resp.json()
+        assert run_data["run_id"] == run_id
+        assert run_data["provider"] == "gemini"
+        assert run_data["inference_model"] == "gemini-3.7-flash"
+        assert run_data["agent"] == "TutorAgent"
+        assert run_data["state_snapshot"]["provider"] == "gemini"
+        assert run_data["state_snapshot"]["inference_model"] == "gemini-3.7-flash"
+
+        # 4. Start second run with ollama
+        run2_resp = api_client.post(
+            f"/guru/courses/{course_id}/syllabus/run",
+            json={
+                "provider": "ollama",
+                "model": "qwen3:4b",
+            },
+            cookies=cookies,
+        )
+        assert run2_resp.status_code == 200
+        run2_id = run2_resp.json()["run_id"]
+        get2_resp = api_client.get(f"/guru/syllabus/runs/{run2_id}", cookies=cookies)
+        assert get2_resp.status_code == 200
+        assert get2_resp.json()["provider"] == "ollama"
+        assert get2_resp.json()["inference_model"] == "qwen3:4b"
+

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { SyllabusBuilderCard } from '../../components/SyllabusBuilderCard'
+import { AdminAssetManagement } from '../../components/admin/AdminAssetManagement'
+import { useAuth } from '../../context/AuthContext'
 import { axiosInstance } from '../../config/axiosConfig'
 import { WS_URL } from '../../config/config'
 import type { SyllabusBuilderPayload } from '../../types/syllabusBuilder'
@@ -61,6 +63,10 @@ function stageDisplayLabel(stage: string): string {
 export function AgentDashboard() {
   const { sessionId, runId } = useParams<{ sessionId?: string; runId?: string }>()
   const navigate = useNavigate()
+  const { isAdmin } = useAuth()
+  const [dashboardView, setDashboardView] = useState<'pipeline' | 'assets'>(
+    isAdmin && !sessionId && !runId ? 'assets' : 'pipeline'
+  )
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -579,19 +585,67 @@ export function AgentDashboard() {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="mb-6">
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-3">
           <div>
-            <h2 className="text-3xl font-bold">Agent Dashboard</h2>
-            <p className="text-sm text-gray-600 mt-1">{showSyllabusRun ? 'Syllabus run' : 'Session'}: {displayId ? `${displayId.substring(0, 12)}...` : '—'}</p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-bold text-slate-900">Agent Dashboard</h2>
+              {isAdmin && (
+                <span className="rounded-full bg-purple-100 px-2.5 py-0.5 text-xs font-bold text-purple-800 border border-purple-200">
+                  Admin Console
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              {isAdmin && dashboardView === 'assets'
+                ? 'System assets, curriculum resources, and API endpoint controls'
+                : showSyllabusRun
+                ? `Syllabus Run: ${displayId ? `${displayId.substring(0, 12)}...` : '—'}`
+                : `Session: ${displayId ? `${displayId.substring(0, 12)}...` : '—'}`}
+            </p>
           </div>
-          <Link
-            to="/dashboard"
-            className="text-sm text-blue-600 hover:text-blue-800"
-          >
-            ← All Sessions
-          </Link>
+
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <div className="flex items-center rounded-lg bg-slate-100 p-1 border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setDashboardView('assets')}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    dashboardView === 'assets'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Asset Management & Endpoints
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDashboardView('pipeline')}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    dashboardView === 'pipeline'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Live Pipeline & Stepper
+                </button>
+              </div>
+            )}
+            <Link
+              to="/dashboard"
+              onClick={() => setDashboardView(isAdmin ? 'assets' : 'pipeline')}
+              className="text-xs font-medium text-blue-600 hover:text-blue-800 border border-blue-200 rounded-lg px-2.5 py-1.5 bg-blue-50/50"
+            >
+              ← Overview
+            </Link>
+          </div>
         </div>
       </div>
+
+      {isAdmin && dashboardView === 'assets' ? (
+        <AdminAssetManagement />
+      ) : (
+        <>
       
       <div className="mb-4 flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
         {showSyllabusRun ? (
@@ -750,7 +804,7 @@ export function AgentDashboard() {
               const bStageIdx = STAGE_ORDER.indexOf(b.stage)
               const aIdxFallback = aStageIdx < 0 ? 999 : aStageIdx
               const bIdxFallback = bStageIdx < 0 ? 999 : bStageIdx
-              if (aStageIdx !== bStageIdx) return aStageIdx - bStageIdx
+              if (aIdxFallback !== bIdxFallback) return aIdxFallback - bIdxFallback
               
               // For module_generator, sort by module_index
               if (a.agent_name === 'module_generator' && b.agent_name === 'module_generator') {
@@ -762,7 +816,7 @@ export function AgentDashboard() {
               return a.agent_name.localeCompare(b.agent_name)
             })
             
-            return sortedTasks.map((task, index) => {
+            return sortedTasks.map((task) => {
               // Create unique key for each task, especially for module_generator
               const taskKey = task.agent_name === 'module_generator' && task.metadata?.module_index
                 ? `${task.agent_name}-${task.stage}-${task.metadata.module_index}-${task.status}`
@@ -1038,6 +1092,8 @@ export function AgentDashboard() {
         <div className="text-center py-12 text-gray-500">
           {isConnected ? 'Waiting for agent tasks...' : 'Not connected to session stream'}
         </div>
+      )}
+        </>
       )}
     </div>
   )

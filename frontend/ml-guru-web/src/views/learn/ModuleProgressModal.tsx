@@ -16,7 +16,6 @@ export default function ModuleProgressModal({
   const progress = learningContext?.progress
   const objectives = learningContext?.objectives ?? []
   const completedSet = new Set(progress?.completed_objectives ?? [])
-  const conceptsTotal = learningContext?.concepts_total ?? objectives.length
   const conceptPositionLabel = learningContext?.concept_position_label
 
   return (

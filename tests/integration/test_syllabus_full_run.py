@@ -40,7 +40,7 @@ def test_user(db_session):
     user = User(
         email="syllabus-test@example.com",
         hashed_password=get_password_hash("testpass123"),
-        preferences={"name": "Test User"},
+        preferences={"name": "Test User", "llm_provider": "ollama", "ollama_model": "qwen3:4b"},
     )
     db_session.add(user)
     db_session.commit()

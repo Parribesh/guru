@@ -11,16 +11,16 @@ def test_settings_defaults():
     s = Settings(
         DATABASE_URL="sqlite:///./test.db",
         LLM_PROVIDER="gemini",
-        GEMINI_MODEL="gemini-2.5-flash",
+        GEMINI_MODEL="gemini-3.7-flash",
     )
     assert s.DATABASE_URL == "sqlite:///./test.db"
     assert s.LLM_PROVIDER == "gemini"
-    assert s.GEMINI_MODEL == "gemini-2.5-flash"
+    assert s.GEMINI_MODEL == "gemini-3.7-flash"
     assert s.OLLAMA_MODEL == "qwen:latest"
 
 
 def test_get_llm_factory_gemini():
-    llm = get_llm(provider="gemini", model="gemini-2.5-flash", api_key="fake-key")
+    llm = get_llm(provider="gemini", model="gemini-3.7-flash", api_key="fake-key")
     assert isinstance(llm, GeminiLLM)
 
 
@@ -30,7 +30,7 @@ def test_get_llm_factory_gemini_missing_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     with pytest.raises(ValueError, match="GEMINI_API_KEY is not configured"):
-        get_llm(provider="gemini", model="gemini-2.5-flash")
+        get_llm(provider="gemini", model="gemini-3.7-flash")
 
 
 def test_get_llm_factory_ollama():

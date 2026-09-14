@@ -1,6 +1,36 @@
 import type { Message } from '../../api/chat_api'
 import type { Interaction, InteractionMetadata } from './types'
 
+export function cleanMessageContent(raw: string): string {
+  if (!raw) return ''
+  let text = raw.trim()
+
+  // 1. Strip raw SSE event headers if present
+  if (text.startsWith('event:')) {
+    const parts = text.split(/\n\n+/)
+    const contentParts = parts.filter(
+      (p) => !p.trim().startsWith('event:') && !p.trim().startsWith('data:')
+    )
+    if (contentParts.length > 0) {
+      text = contentParts.join('\n\n')
+    }
+  }
+
+  // 2. Unpack Python list/dict representation: [{'type': 'text', 'text': '...'}]
+  if (text.startsWith('[{') && text.includes("'text':")) {
+    const match = text.match(/'text':\s*'((?:[^'\\]|\\.)*)'/)
+    if (match && match[1]) {
+      text = match[1]
+        .replace(/\\n/g, '\n')
+        .replace(/\\'/g, "'")
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\')
+    }
+  }
+
+  return text.trim()
+}
+
 export function buildInteractionsFromMessages(
   msgs: Message[],
   existingInteractions: Interaction[] = []
@@ -24,7 +54,7 @@ export function buildInteractionsFromMessages(
       pendingUser = msg
     } else if (msg.role === 'assistant' && pendingUser) {
       const interactionKey = `${pendingUser.id}_${msg.id}`
-      const existingMetadata = existingMetadataMap.get(interactionKey) || {}
+      const existingMetadata = existingMetadataMap.get(interactionKey)
       let dbMetadata = msg.interaction_metadata || {}
       if (typeof dbMetadata === 'string') {
         try {
@@ -36,11 +66,11 @@ export function buildInteractionsFromMessages(
       newInteractions.push({
         id: interactionKey,
         userMessage: pendingUser,
-        assistantMessage: msg,
+        assistantMessage: { ...msg, content: cleanMessageContent(msg.content) },
         metadata: {
           timestamp: msg.created_at,
-          retrievedHistory: existingMetadata.retrievedHistory || dbMetadata.retrieved_history || undefined,
-          systemPrompt: existingMetadata.systemPrompt || dbMetadata.system_prompt || undefined,
+          retrievedHistory: existingMetadata?.retrievedHistory || dbMetadata.retrieved_history || undefined,
+          systemPrompt: existingMetadata?.systemPrompt || dbMetadata.system_prompt || undefined,
         },
       })
       pendingUser = null
@@ -48,12 +78,16 @@ export function buildInteractionsFromMessages(
   }
 
   if (pendingUser) {
-    const existingMetadata = existingMetadataMap.get(`${pendingUser.id}_pending`) || {}
+    const existingMetadata = existingMetadataMap.get(`${pendingUser.id}_pending`)
     newInteractions.push({
       id: `${pendingUser.id}_pending`,
       userMessage: pendingUser,
       assistantMessage: null,
-      metadata: { timestamp: pendingUser.created_at, ...existingMetadata },
+      metadata: {
+        timestamp: pendingUser.created_at,
+        retrievedHistory: existingMetadata?.retrievedHistory,
+        systemPrompt: existingMetadata?.systemPrompt,
+      },
       isStreaming: false,
     })
   }
@@ -82,7 +116,7 @@ export function buildChatInteractionsFromMessages(msgs: Message[]): Interaction[
       newInteractions.push({
         id: interactionKey,
         userMessage: pendingUser,
-        assistantMessage: msg,
+        assistantMessage: { ...msg, content: cleanMessageContent(msg.content) },
         metadata: {
           timestamp: msg.created_at,
           retrievedHistory: dbMetadata.retrieved_history ?? undefined,

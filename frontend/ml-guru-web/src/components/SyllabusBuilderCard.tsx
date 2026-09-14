@@ -22,6 +22,7 @@ interface SyllabusBuilderCardProps {
 export function SyllabusBuilderCard({ payload, index }: SyllabusBuilderCardProps) {
   const { stage, state, done } = payload
   const agent = state.agent ?? payload.agent
+  const provider = state.provider ?? payload.provider
   const inference_model = state.inference_model ?? payload.inference_model
   const level = state.current_level
   const concepts = state.current_concepts ?? []
@@ -45,7 +46,7 @@ export function SyllabusBuilderCard({ payload, index }: SyllabusBuilderCardProps
         {done && <span className="ml-2 text-green-600">Done</span>}
         {(agent || inference_model) && (
           <span className="ml-2 text-slate-500 font-normal">
-            {[agent, inference_model].filter(Boolean).join(' · ')}
+            {[agent, provider ? `(${provider})` : null, inference_model].filter(Boolean).join(' ')}
           </span>
         )}
         {hasPrompt && <span className="ml-2 text-blue-600">Prompt ✓</span>}
@@ -62,6 +63,7 @@ export function SyllabusBuilderCard({ payload, index }: SyllabusBuilderCardProps
             <div className="font-semibold text-gray-700 mb-1">Agent (in state)</div>
             <div className="pl-2 space-y-0.5">
               {agent && <div>agent: {agent}</div>}
+              {provider && <div>provider: {provider}</div>}
               {inference_model && <div>inference_model: {inference_model}</div>}
             </div>
           </section>

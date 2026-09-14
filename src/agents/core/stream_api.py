@@ -31,6 +31,7 @@ async def run_stream(
         )
     agent.memory = memory
     agent.state.metadata = dict(metadata)
+    agent.state.stream = True
 
     async for chunk in agent.run_stream(message):
         yield chunk

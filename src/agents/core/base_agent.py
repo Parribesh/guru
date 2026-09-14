@@ -50,16 +50,19 @@ class BaseAgent(ABC):
         chunks: list[str] = []
         try:
             async for chunk in self.execute_stream(plan):
-                # Collect chunks so we can persist the full assistant message to memory at the end.
-                chunks.append(str(chunk))
+                chunk_str = str(chunk)
+                # Only collect assistant answer content; do not persist SSE event frames
+                if not chunk_str.startswith("event:") and not chunk_str.startswith("data:"):
+                    chunks.append(chunk_str)
                 yield chunk
         except Exception as e:
             logger.exception("error streaming: %s", e)
             # Let the HTTP layer format this for SSE.
             yield f"error: {str(e)}"
         finally:
-            final = "".join(chunks)
-            self._after_run(input, final)
+            final = "".join(chunks).strip()
+            if final:
+                self._after_run(input, final)
     #-----------EXTENSION POINTS-----------
     @abstractmethod
     def plan(self, input:str) -> Any:

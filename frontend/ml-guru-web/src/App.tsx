@@ -1,43 +1,24 @@
-import { useCallback, useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import './App.css'
 import { Layout } from './components/Layout'
 import { GuruChat } from './views/guru/GuruChat'
 import { LoginPage } from './views/auth/LoginPage'
-import { getMe } from './api/auth_api'
 import { Courses } from './views/courses/Courses'
 import { CourseSettings } from './views/courses/CourseSettings'
 import LearningSessionChat from './views/learn/LearningSessionChat'
 import { AgentDashboard } from './views/dashboard/AgentDashboard'
 import { ProfilePage } from './views/profile/ProfilePage'
+import { AuthProvider, useAuth } from './context/AuthContext'
 
-function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [authChecked, setAuthChecked] = useState(false)
+function AppRoutes() {
+  const { isLoggedIn, loading, refreshAuth } = useAuth()
 
-  const refreshAuth = useCallback(async () => {
-    try {
-      const user = await getMe()
-      setIsLoggedIn(true)
-      setUserEmail(user.email)
-    } catch {
-      setIsLoggedIn(false)
-      setUserEmail(null)
-    } finally {
-      setAuthChecked(true)
-    }
-  }, [])
-
-  useEffect(() => {
-    refreshAuth()
-  }, [refreshAuth])
-
-  if (!authChecked) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
         <div className="text-center">
-          <p className="text-slate-600">Loading…</p>
+          <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent mb-3" />
+          <p className="text-xs font-semibold text-slate-500">Loading ML Guru…</p>
         </div>
       </div>
     )
@@ -50,30 +31,12 @@ function App() {
 
   return (
     <Routes>
-      <Route
-        path="/"
-        element={
-          <Layout
-            isLoggedIn={isLoggedIn}
-            userEmail={userEmail}
-            onLogout={() => {
-              setIsLoggedIn(false)
-              setUserEmail(null)
-            }}
-          />
-        }
-      >
+      <Route path="/" element={<Layout />}>
         <Route index element={<Navigate to={isLoggedIn ? '/courses' : '/login'} replace />} />
 
         <Route
           path="login"
-          element={
-            isLoggedIn ? (
-              <Navigate to="/courses" replace />
-            ) : (
-              <LoginPage onAuthSuccess={refreshAuth} />
-            )
-          }
+          element={isLoggedIn ? <Navigate to="/courses" replace /> : <LoginPage onAuthSuccess={refreshAuth} />}
         />
 
         <Route
@@ -164,6 +127,14 @@ function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
+  )
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppRoutes />
+    </AuthProvider>
   )
 }
 

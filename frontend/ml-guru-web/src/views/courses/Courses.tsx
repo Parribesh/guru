@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
-import { SyllabusBuilderCard } from '../../components/SyllabusBuilderCard'
+import { InteractiveCourseBuilder } from '../../components/InteractiveCourseBuilder'
+import { autoRunSyllabus, rerunSyllabus } from '../../api/syllabus_api'
 import { axiosInstance } from '../../config/axiosConfig'
 import { API_URL, WS_URL } from '../../config/config'
 import type { SyllabusBuilderPayload } from '../../types/syllabusBuilder'
@@ -45,6 +46,11 @@ export const Courses = () => {
   const [draft, setDraft] = useState<SyllabusDraftResponse | null>(null)
   const [busy, setBusy] = useState(false)
 
+  // Model selection for syllabus generation
+  const [provider, setProvider] = useState<'gemini' | 'ollama'>('gemini')
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.6-flash')
+  const [ollamaModels, setOllamaModels] = useState<string[]>([])
+
   // Syllabus builder: step-by-step (Continue button); one card updated in place
   const [syllabusRunId, setSyllabusRunId] = useState<string | null>(null)
   const [syllabusPhase, setSyllabusPhase] = useState<string | null>(null)
@@ -53,11 +59,12 @@ export const Courses = () => {
     stage: string
     data: Record<string, unknown>
     agent?: string
+    provider?: string
     inference_model?: string
   } | null>(null)
-  const [syllabusStepVersion, setSyllabusStepVersion] = useState(0)
   const [syllabusModules, setSyllabusModules] = useState<DraftModule[]>([])
   const [syllabusStepBusy, setSyllabusStepBusy] = useState(false)
+  const [isAutoRunning, setIsAutoRunning] = useState(false)
   const syllabusWsRef = useRef<WebSocket | null>(null)
 
   // Test UI
@@ -84,6 +91,37 @@ export const Courses = () => {
 
   useEffect(() => {
     loadCourses()
+
+    // Fetch available local Ollama models
+    axiosInstance
+      .get('/guru/ollama/models')
+      .then((r) => {
+        const data = r.data as { models?: Array<{ name?: string }> }
+        const names = (data.models || [])
+          .map((m) => m.name)
+          .filter((n): n is string => Boolean(n))
+        setOllamaModels(names)
+      })
+      .catch(() => {})
+
+    // Load saved user provider / model preferences
+    axiosInstance
+      .get('/auth/me')
+      .then((r) => {
+        const user = r.data as { preferences?: Record<string, unknown> }
+        const prefs = user?.preferences || {}
+        if (prefs.llm_provider === 'ollama' || prefs.llm_provider === 'gemini') {
+          const prov = prefs.llm_provider as 'gemini' | 'ollama'
+          setProvider(prov)
+          if (prov === 'gemini') {
+            const m = String(prefs.gemini_model || '')
+            setSelectedModel(m && m !== 'gemini-2.5-flash' && m !== 'gemini-3.7-flash' ? m : 'gemini-3.6-flash')
+          } else if (prov === 'ollama' && prefs.ollama_model) {
+            setSelectedModel(String(prefs.ollama_model))
+          }
+        }
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -119,7 +157,6 @@ export const Courses = () => {
               const stage = (snap.next_node as string) || (snap.phase as string) || 'running'
               setSyllabusPhase(stage)
               setSyllabusCurrentStep({ stage, data: snap })
-              setSyllabusStepVersion((v) => v + 1)
             }
           } else {
             try {
@@ -151,9 +188,10 @@ export const Courses = () => {
         setSyllabusPhase(body.stage)
         setSyllabusCurrentStep({
           stage: body.stage,
-          data: state,
-          agent: body.agent,
-          inference_model: body.inference_model,
+          data: state as Record<string, unknown>,
+          agent: body.agent ?? undefined,
+          provider: body.provider ?? undefined,
+          inference_model: body.inference_model ?? undefined,
         })
         if (body.done) {
           setSyllabusStatus('completed')
@@ -202,8 +240,8 @@ export const Courses = () => {
       setSelectedCourseId(d.course_id)
       await loadCourses()
       await loadCourseDetail(d.course_id)
-      // Auto-start the streamed syllabus builder so progress is visible in real time.
-      await startSyllabusRunFor(d.course_id)
+      // Auto-start the streamed syllabus builder with chosen provider and model
+      await startSyllabusRunFor(d.course_id, provider, selectedModel)
     } finally {
       setBusy(false)
     }
@@ -221,7 +259,7 @@ export const Courses = () => {
     }
   }
 
-  const startSyllabusRunFor = async (courseId: string) => {
+  const startSyllabusRunFor = async (courseId: string, runProvider?: string, runModel?: string, runAgent: string = 'TutorAgent') => {
     setBusy(true)
     try {
       const runToDelete = syllabusRunId
@@ -232,14 +270,68 @@ export const Courses = () => {
       if (runToDelete) {
         await axiosInstance.delete(`/guru/syllabus/runs/${runToDelete}`).catch(() => {})
       }
-      const r = await axiosInstance.post(`/guru/courses/${courseId}/syllabus/run`)
+      const activeProvider = runProvider || provider
+      const activeModel = runModel || selectedModel
+      const r = await axiosInstance.post(`/guru/courses/${courseId}/syllabus/run`, {
+        provider: activeProvider,
+        model: activeModel,
+        agent: runAgent,
+      })
       const runId = (r.data as { run_id: string }).run_id
       setSyllabusRunId(runId)
       try {
         sessionStorage.setItem(`syllabusRun-${courseId}`, runId)
       } catch (_) {}
+      return runId
     } finally {
       setBusy(false)
+    }
+  }
+
+  const rerunSyllabusCustom = async (rerunProv: string, rerunMod: string, rerunAgent: string) => {
+    if (!selectedCourseId) return
+    setBusy(true)
+    try {
+      setSyllabusRunId(null)
+      setSyllabusPhase('planning')
+      setSyllabusStatus('running')
+      setSyllabusCurrentStep(null)
+      const res = await rerunSyllabus(selectedCourseId, rerunProv, rerunMod, rerunAgent)
+      setSyllabusRunId(res.run_id)
+      try {
+        sessionStorage.setItem(`syllabusRun-${selectedCourseId}`, res.run_id)
+      } catch (_) {}
+      await loadCourseDetail(selectedCourseId)
+    } catch (e) {
+      console.error('rerun syllabus error', e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const autoRunSyllabusFull = async () => {
+    let effectiveRunId = syllabusRunId
+    if (!effectiveRunId && selectedCourseId) {
+      effectiveRunId = await startSyllabusRunFor(selectedCourseId)
+    }
+    if (!effectiveRunId) return
+    setIsAutoRunning(true)
+    try {
+      const res = await autoRunSyllabus(effectiveRunId, 30)
+      if (res.done) {
+        setSyllabusStatus('completed')
+        if (selectedCourseId) {
+          try {
+            sessionStorage.removeItem(`syllabusRun-${selectedCourseId}`)
+          } catch (_) {}
+          await loadCourseDetail(selectedCourseId)
+          await loadCourses()
+        }
+      }
+    } catch (e) {
+      console.error('auto-run syllabus error', e)
+    } finally {
+      setIsAutoRunning(false)
     }
   }
 
@@ -253,11 +345,11 @@ export const Courses = () => {
       setSyllabusPhase(body.stage)
       setSyllabusCurrentStep({
         stage: body.stage,
-        data: state,
+        data: state as Record<string, unknown>,
         agent: body.agent ?? undefined,
+        provider: body.provider ?? undefined,
         inference_model: body.inference_model ?? undefined,
       })
-      setSyllabusStepVersion((v) => v + 1)
       if (body.done) {
         setSyllabusStatus('completed')
         if (Array.isArray(state.modules)) setSyllabusModules(state.modules as DraftModule[])
@@ -280,11 +372,6 @@ export const Courses = () => {
     } finally {
       setSyllabusStepBusy(false)
     }
-  }
-
-  const startSyllabusRun = async () => {
-    if (!selectedCourseId) return
-    return startSyllabusRunFor(selectedCourseId)
   }
 
   const startTest = async (moduleId: string) => {
@@ -370,14 +457,6 @@ export const Courses = () => {
     return { total, passed, pct }
   }, [courseDetail])
 
-  const syllabusProgressPct = useMemo(() => {
-    if (syllabusStatus === 'idle') return 0
-    if (syllabusStatus === 'failed') return 100
-    if (syllabusStatus === 'completed') return 100
-    if (syllabusCurrentStep) return 50
-    return 10
-  }, [syllabusPhase, syllabusStatus, syllabusCurrentStep])
-
   return (
     <div className="flex h-[calc(100vh-120px)] gap-4">
       <div className="w-[320px] rounded-lg border border-gray-200 bg-white p-4">
@@ -411,6 +490,94 @@ export const Courses = () => {
             <input className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" />
             <input className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject (e.g., Python)" />
             <textarea className="w-full resize-none rounded-md border border-gray-300 px-3 py-2 text-sm" value={goals} onChange={(e) => setGoals(e.target.value)} placeholder="Goals (optional)" />
+
+            {/* Model & Provider Selector for Syllabus Generation */}
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 space-y-2 text-xs">
+              <div className="flex items-center justify-between font-semibold text-slate-700">
+                <span>Generation Model</span>
+                <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-mono uppercase text-slate-600">
+                  {provider}
+                </span>
+              </div>
+
+              {/* Segmented Provider Pill */}
+              <div className="grid grid-cols-2 gap-1 rounded-md bg-slate-200/80 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProvider('gemini')
+                    setSelectedModel('gemini-3.7-flash')
+                  }}
+                  className={`py-1 text-center font-medium rounded text-xs transition ${
+                    provider === 'gemini'
+                      ? 'bg-white text-blue-600 shadow-sm font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Gemini (Cloud)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProvider('ollama')
+                    setSelectedModel(ollamaModels[0] || 'qwen3:4b')
+                  }}
+                  className={`py-1 text-center font-medium rounded text-xs transition ${
+                    provider === 'ollama'
+                      ? 'bg-white text-blue-600 shadow-sm font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Ollama (Local)
+                </button>
+              </div>
+
+              {/* Model Dropdown */}
+              {provider === 'gemini' ? (
+                <div className="space-y-1">
+                  <select
+                    className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none"
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                  >
+                    <option value="gemini-3.7-flash">Gemini 3.7 Flash (Default - Fast & High Reasoning)</option>
+                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep Analysis)</option>
+                  </select>
+                  <div className="text-[10px] text-slate-500">
+                    Recommended for structured pedagogical outlines.
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {ollamaModels.length > 0 ? (
+                    <select
+                      className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none"
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                    >
+                      {ollamaModels.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none"
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      placeholder="e.g. qwen3:4b or llama3.2"
+                    />
+                  )}
+                  <div className="text-[10px] text-slate-500">
+                    {ollamaModels.length > 0
+                      ? `${ollamaModels.length} local model${ollamaModels.length === 1 ? '' : 's'} available.`
+                      : 'Connecting to local Ollama (http://localhost:11434)...'}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button disabled={!canCreate || busy} className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-gray-300" onClick={createCourse} type="button">
               Create + Generate syllabus
             </button>
@@ -461,103 +628,48 @@ export const Courses = () => {
             </div>
 
             {!courseDetail?.course.syllabus_confirmed && (
-              <div className="mt-4 rounded-md border border-gray-200 p-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-semibold">Syllabus Builder</div>
-                    <div className="text-xs text-gray-500">generate_concepts → validate → add_concepts (retry) → add_module per level</div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      disabled={!selectedCourseId || busy}
-                      className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-gray-300"
-                      onClick={startSyllabusRun}
-                      type="button"
-                    >
-                      {syllabusStatus === 'running' ? 'Running…' : 'Run syllabus builder'}
-                    </button>
-                    {syllabusRunId && (
-                      <Link
-                        to={`/dashboard/syllabus-run/${syllabusRunId}`}
-                        className="rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700"
-                      >
-                        View Dashboard
-                      </Link>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-3">
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                    <div className="h-2 rounded-full bg-blue-600" style={{ width: `${syllabusProgressPct}%` }} />
-                  </div>
-                </div>
-
-                <div className="mt-3">
-                  {syllabusStatus === 'running' && (
-                    <div className="mb-2 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs font-medium text-blue-800">
-                      <span className="font-semibold">Syllabus run in progress</span>
-                      {syllabusRunId && <span className="text-blue-600">Run ID: {syllabusRunId.slice(0, 8)}…</span>}
-                      {syllabusPhase && <span>Stage: {syllabusPhase}</span>}
-                    </div>
-                  )}
-                  <div className="text-xs font-semibold uppercase text-gray-500 mb-2">Current step (updates when you click Continue)</div>
-                  <div className="rounded-md border border-gray-200 bg-gray-50 p-2">
-                    {!syllabusCurrentStep && syllabusStatus === 'running' && (
-                      <div className="text-xs text-gray-500 mb-2">Click Continue to run the next node.</div>
-                    )}
-                    {syllabusCurrentStep && (
-                      <SyllabusBuilderCard
-                        key={`${syllabusRunId ?? ''}-${syllabusCurrentStep.stage}-${syllabusStepVersion}`}
-                        index={1}
-                        payload={{
+              <div className="mt-4">
+                <InteractiveCourseBuilder
+                  courseId={selectedCourseId || ''}
+                  courseTitle={courseDetail?.course.title || title || 'Course'}
+                  subject={courseDetail?.course.subject || subject || 'Machine Learning'}
+                  goals={courseDetail?.course.goals || goals || null}
+                  syllabusRunId={syllabusRunId}
+                  syllabusStatus={syllabusStatus}
+                  syllabusPhase={syllabusPhase}
+                  currentPayload={
+                    syllabusCurrentStep
+                      ? {
                           stage: syllabusCurrentStep.stage,
-                          state: syllabusCurrentStep.data as SyllabusBuilderPayload['state'],
+                          state: {
+                            ...syllabusCurrentStep.data,
+                            modules:
+                              ((syllabusCurrentStep.data.modules as unknown[])?.length
+                                ? (syllabusCurrentStep.data.modules as any)
+                                : syllabusModules) || [],
+                          },
                           done: syllabusStatus === 'completed',
-                          agent: syllabusCurrentStep.agent ?? undefined,
-                          inference_model: syllabusCurrentStep.inference_model ?? undefined,
-                        }}
-                      />
-                    )}
-                  </div>
-                  <div className="mt-2 flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      disabled={!syllabusRunId || syllabusStatus !== 'running' || syllabusStepBusy}
-                      onClick={continueSyllabusStep}
-                      className="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                      {syllabusStepBusy ? 'Running…' : 'Continue'}
-                    </button>
-                    {selectedCourseId && (syllabusRunId || syllabusStatus === 'running' || syllabusStatus === 'completed') && (
-                      <button
-                        type="button"
-                        disabled={busy || syllabusStepBusy}
-                        onClick={() => startSyllabusRunFor(selectedCourseId)}
-                        className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-                      >
-                        Rerun from scratch
-                      </button>
-                    )}
-                    {syllabusStatus === 'completed' && (
-                      <span className="text-sm text-green-600 font-medium">Syllabus complete</span>
-                    )}
-                  </div>
-                </div>
-
-                {syllabusModules.length > 0 ? (
-                  <div className="mt-3 rounded-md border border-gray-200 p-3">
-                    <div className="text-sm font-semibold">Draft modules</div>
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      {syllabusModules.map((m, i) => (
-                        <div key={i} className="rounded-md border border-gray-200 bg-white p-2 text-sm">
-                          <div className="font-semibold">{i + 1}. {m.title}</div>
-                          <div className="mt-1 text-xs text-gray-600">{m.objectives.slice(0, 3).join(' • ')}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
+                          agent: syllabusCurrentStep.agent,
+                          provider: syllabusCurrentStep.provider,
+                          inference_model: syllabusCurrentStep.inference_model,
+                        }
+                      : {
+                          stage: 'planning',
+                          state: {
+                            modules: syllabusModules as any,
+                          },
+                          done: syllabusStatus === 'completed',
+                        }
+                  }
+                  isStepBusy={syllabusStepBusy}
+                  isAutoRunning={isAutoRunning}
+                  availableOllamaModels={ollamaModels}
+                  onStep={continueSyllabusStep}
+                  onAutoRun={autoRunSyllabusFull}
+                  onRerun={rerunSyllabusCustom}
+                  onConfirm={confirmSyllabus}
+                  onUpdateModules={(updated) => setSyllabusModules(updated)}
+                />
               </div>
             )}
 

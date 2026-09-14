@@ -99,3 +99,38 @@ class TutorAgent(BaseAgent):
         answer = state.get("answer") or ""
         if answer:
             yield str(answer)
+
+    # -------------------------------------------------------------------------
+    # Curriculum Planning Methods (Macro-Pedagogy)
+    # -------------------------------------------------------------------------
+
+    def get_initial_syllabus_state(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """Build initial state for step-by-step syllabus run."""
+        from agents.tutor_agent.curriculum.planner import initial_step_state
+        return initial_step_state(plan)
+
+    def get_initial_step_state(self, plan: dict[str, Any]) -> dict[str, Any]:
+        """Alias for backwards compatibility with syllabus runner."""
+        return self.get_initial_syllabus_state(plan)
+
+    async def run_one_step(
+        self,
+        state: dict[str, Any],
+        *,
+        inference_model: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Run one node of the curriculum generation graph."""
+        from agents.tutor_agent.curriculum.planner import step_curriculum
+        return await step_curriculum(
+            state,
+            self.llm,
+            agent_name=self.name,
+            inference_model=inference_model,
+        )
+
+    async def run_syllabus_stream(self, plan: dict[str, Any]) -> AsyncIterator[str]:
+        """Stream syllabus generation end-to-end node by node."""
+        from agents.tutor_agent.curriculum.planner import stream_curriculum
+        async for chunk in stream_curriculum(plan, self.llm):
+            yield chunk
+

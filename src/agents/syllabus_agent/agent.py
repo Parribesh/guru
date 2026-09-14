@@ -11,36 +11,12 @@ from typing import Any, AsyncIterator, Dict, Optional
 from agents.core.base_agent import BaseAgent
 from agents.core.memory import Memory
 from agents.core.tool import Tool
-from agents.syllabus_agent.agentic.graph import build_syllabus_level_graph, get_levels, run_one_step as graph_run_one_step
-from agents.syllabus_agent.agentic.prompts import SYLLABUS_AGENT_SYSTEM_PROMPT
-from agents.syllabus_agent.agentic.schemas import SyllabusState
-
-
-def _initial_level_state(plan: Dict[str, Any]) -> Dict[str, Any]:
-    """Build initial LangGraph state (syllabus fields + per-level placeholders)."""
-    state = SyllabusState.create_initial(
-        course_title=plan.get("course_title", ""),
-        subject=plan.get("subject", ""),
-        goals=plan.get("goals"),
-        target_level=plan.get("target_level", "beginner"),
-        time_budget_minutes=plan.get("time_budget_minutes"),
-    )
-    out = state.to_serializable()
-    out["current_level"] = ""
-    out["current_concepts"] = []
-    out["meets_threshold"] = False
-    out["needed_count"] = 0
-    out["add_concepts_rounds"] = 0
-    return out
-
-
-def _initial_step_state(plan: Dict[str, Any]) -> Dict[str, Any]:
-    """Initial state for step-by-step run: includes next_node and current_level."""
-    state = _initial_level_state(plan)
-    levels = list(get_levels())
-    state["next_node"] = "generate_concepts"
-    state["current_level"] = levels[0] if levels else "beginner"
-    return state
+from agents.tutor_agent.curriculum.graph import build_syllabus_level_graph, get_levels, run_one_step as graph_run_one_step
+from agents.tutor_agent.curriculum.prompts import SYLLABUS_AGENT_SYSTEM_PROMPT
+from agents.tutor_agent.curriculum.planner import (
+    initial_level_state as _initial_level_state,
+    initial_step_state as _initial_step_state,
+)
 
 
 class SyllabusAgent(BaseAgent):

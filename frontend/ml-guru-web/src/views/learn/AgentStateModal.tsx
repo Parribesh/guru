@@ -10,7 +10,7 @@ interface AgentStateModalProps {
   open: boolean
   onClose: () => void
   conversationId: string | null
-  agentContext: Record<string, unknown> | null
+  agentContext: Record<string, any> | null
   agentContextLoading: boolean
   systemPrompt: string
   /** When present, show a second "Chat agent" section (learning session Q&A) */

@@ -24,8 +24,9 @@ export interface SyllabusBuilderState {
   step_output?: string | null
   /** Base agent system prompt (scenario); single system prompt for the run */
   system_prompt?: string | null
-  /** Agent info (which agent and model used for inference) */
+  /** Agent info (which agent, provider, and model used for inference) */
   agent?: string | null
+  provider?: string | null
   inference_model?: string | null
   // Misc
   current_stage?: string
@@ -40,5 +41,6 @@ export interface SyllabusBuilderPayload {
   state: SyllabusBuilderState
   done: boolean
   agent?: string | null
+  provider?: string | null
   inference_model?: string | null
 }

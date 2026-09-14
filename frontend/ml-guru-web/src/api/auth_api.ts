@@ -1,12 +1,30 @@
 import { axiosInstance } from '../config/axiosConfig'
 import { loginRequestSchema, registerRequestSchema, type LoginRequest, type LoginResponse, type RegisterRequest, type RegisterResponse } from '../schemas/authSchemas'
 
-export type UserInfo = { email: string; preferences?: Record<string, unknown> }
+export type UserInfo = {
+  id?: number
+  email: string
+  role?: string
+  is_admin?: boolean
+  preferences?: Record<string, unknown>
+}
 
 export const getMe = async (): Promise<UserInfo> => {
   const response = await axiosInstance.get('/auth/me')
-  const data = response.data as { email: string; preferences?: Record<string, unknown> }
-  return { email: data.email, preferences: data.preferences }
+  const data = response.data as {
+    id?: number
+    email: string
+    role?: string
+    is_admin?: boolean
+    preferences?: Record<string, unknown>
+  }
+  return {
+    id: data.id,
+    email: data.email,
+    role: data.role || 'user',
+    is_admin: Boolean(data.is_admin || data.role === 'admin'),
+    preferences: data.preferences,
+  }
 }
 
 export const login = async (loginRequest: LoginRequest): Promise<LoginResponse> => {
