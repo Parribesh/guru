@@ -10,8 +10,7 @@ from api.models.models import Conversation, Module, Course, Message
 from api.models.session import Session
 from api.services.session_service import SessionService
 from api.services.agent_stream_service import stream_agent_response
-from api.utils.common import ollama_model_for_user
-from infra.llm.ollama import OllamaLLM
+from infra.llm import get_llm_for_user
 from agents.chat_agent.agent import ChatAgent
 
 
@@ -140,9 +139,8 @@ class ChatService:
             "course_title": course.title if course else "",
         }
 
-        model = ollama_model_for_user(self.db, session.user_id)
-        llm = OllamaLLM(model=model)
-        registry = build_registry()
+        llm = get_llm_for_user(self.db, session.user_id)
+        registry = build_registry(llm=llm)
         agent = ChatAgent(name="ChatAgent", llm=llm, registry=registry)
         session_service = SessionService(self.db)
         return stream_agent_response(

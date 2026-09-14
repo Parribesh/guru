@@ -8,8 +8,7 @@ from sqlalchemy.orm import Session as DBSession
 from api.models.session import Session
 from api.services.session_service import SessionService
 from api.services.agent_stream_service import stream_agent_response
-from api.utils.common import ollama_model_for_user
-from infra.llm.ollama import OllamaLLM
+from infra.llm import get_llm_for_user
 from agents.tutor_agent.agent import TutorAgent
 
 
@@ -28,20 +27,19 @@ class TutorService:
         """
         Run tutor agent stream for the given lesson conversation.
         Session must be resolved by Session.conversation_id == conversation_id.
-        Uses user's profile ollama_model for inference.
+        Uses user's configured LLM for inference.
         """
         from api.bootstrap import build_registry
         from agents.chat_agent.agent import ChatAgent
 
-        model = ollama_model_for_user(self.db, session.user_id)
-        llm = OllamaLLM(model=model)
+        llm = get_llm_for_user(self.db, session.user_id)
         agent = TutorAgent(name="TutorAgent", llm=llm)
         agent_metadata = dict(session.agent_metadata or {})
         session_service = SessionService(self.db)
         # Pass chat agent's history store so tutor exchanges can be synced for Q&A retrieval
         chat_history_store = None
         if getattr(session, "chat_conversation_id", None):
-            registry = build_registry()
+            registry = build_registry(llm=llm)
             chat_agent = ChatAgent(name="ChatAgent", llm=llm, registry=registry)
             chat_history_store = chat_agent.history_store
         return stream_agent_response(

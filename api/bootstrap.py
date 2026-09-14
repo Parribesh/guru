@@ -4,14 +4,18 @@ from agents.tutor_agent.agent import TutorAgent
 from agents.rag_agent.agent import RAGAgent
 from agents.syllabus_agent.agent import SyllabusAgent
 
-from infra.llm.ollama import OllamaLLM
+from typing import Optional
+
+from agents.core.llm import LLM
+from infra.llm import get_llm
 from infra.vector.chroma_store import ChromaStore
 
 
-def build_registry() -> AgentRegistry:
+def build_registry(llm: Optional[LLM] = None) -> AgentRegistry:
     registry = AgentRegistry()
 
-    llm = OllamaLLM(model="qwen:latest")
+    if llm is None:
+        llm = get_llm()
     vector_store = ChromaStore()
 
     registry.register(

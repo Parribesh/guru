@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session as DBSession
 from api.bootstrap import build_registry
 from api.models.models import Course, SyllabusEvent, SyllabusRun, User as DbUser
 from api.utils.logger import configure_logging
-from infra.llm.ollama import OllamaLLM
+from infra.llm import get_llm_for_user
 from agents.syllabus_agent.agent import SyllabusAgent
 
 logger = configure_logging()
@@ -114,10 +114,7 @@ class SyllabusService:
         )
         if not course:
             return None
-        user = self.db.query(DbUser).filter(DbUser.id == user_id).first()
-        prefs = user.preferences if user and isinstance(user.preferences, dict) else {}
-        model = prefs.get("ollama_model") or "qwen:latest"
-        llm = OllamaLLM(model=model)
+        llm = get_llm_for_user(self.db, user_id)
         agent = SyllabusAgent(name="SyllabusAgent", llm=llm)
         plan = {
             "course_title": course.title,

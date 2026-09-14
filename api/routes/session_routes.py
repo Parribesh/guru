@@ -254,11 +254,10 @@ async def send_message(
     from agents.chat_agent.agent import ChatAgent
     from agents.chat_agent.memory import ChatAgentMemory
     from agents.tutor_agent.agent import TutorAgent
-    from infra.llm.ollama import OllamaLLM
+    from infra.llm import get_llm_for_user
 
-    model = ollama_model_for_user(db, user_id)
-    llm = OllamaLLM(model=model)
-    registry = build_registry()
+    llm = get_llm_for_user(db, user_id)
+    registry = build_registry(llm=llm)
 
     if session.agent_name == "tutor":
         agent = TutorAgent(name="TutorAgent", llm=llm)

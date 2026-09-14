@@ -26,7 +26,9 @@ dependencies = [
     "pytest",
     "pytest-asyncio",
     "networkx",
-    "psycopg2-binary"
+    "psycopg2-binary",
+    "langchain-google-genai>=4.4.0",
+    "langchain-ollama>=1.1.0",
 ]
 
 [project.optional-dependencies]

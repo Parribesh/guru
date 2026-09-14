@@ -10,7 +10,14 @@ from sqlalchemy.orm import sessionmaker
 def override_get_db():
     """Create in-memory engine and session factory for API tests."""
     from api.config import Base
-    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    import api.models.models  # noqa: F401
+    import api.models.session  # noqa: F401
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(engine)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
